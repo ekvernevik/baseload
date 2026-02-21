@@ -76,7 +76,7 @@ def main() -> None:
     rows = []
     soc_store = {}
     for zone in sorted(prices.columns):
-        rev, soc = run_rh(prices[zone].fillna(method="ffill").fillna(0), p_mw, e_mwh, eta, lookahead, step)
+        rev, soc = run_rh(prices[zone].ffill().fillna(0), p_mw, e_mwh, eta, lookahead, step)
         pf_rev = float(pf.loc[zone, "net_revenue"])
         penalty = 100 * (pf_rev - rev) / pf_rev if pf_rev else 0.0
         rows.append({"zone": zone, "rolling_revenue": rev, "pf_revenue": pf_rev, "penalty_pct": penalty, "eur_per_kw_yr": rev / (p_mw * 1000)})

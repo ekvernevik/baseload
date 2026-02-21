@@ -1,7 +1,7 @@
 zones: [NO1, NO2, NO3, NO4, NO5]
 date_range:
-  start: "2023-01-01T00:00:00Z"
-  end: "2023-12-31T23:00:00Z"
+  start: "2025-01-01T00:00:00Z"
+  end: "2025-12-31T23:00:00Z"
 paths:
   raw_dir: data/raw
   processed_dir: data/processed

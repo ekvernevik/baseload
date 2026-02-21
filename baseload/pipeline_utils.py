@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +19,16 @@ DEFAULT_TIME_COLS = [
     "time",
     "utc_time",
     "period_start",
+    "mtu",
 ]
-DEFAULT_VALUE_COLS = ["price", "value", "eur_mwh", "day_ahead_price", "spot_price"]
+DEFAULT_VALUE_COLS = [
+    "price",
+    "value",
+    "eur_mwh",
+    "day_ahead_price",
+    "spot_price",
+    "day_ahead",
+]
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -52,16 +61,31 @@ def parse_csv_flexible(path: Path) -> pd.DataFrame:
     raise ValueError(f"Failed to parse CSV {path}. Last error: {last_err}")
 
 
+def _normalize(name: str) -> str:
+    """Collapse a column header to lower-case alphanumeric + underscores."""
+    return re.sub(r'[^a-z0-9]+', '_', name.lower().strip()).strip('_')
+
+
 def _find_column(columns: list[str], candidates: list[str]) -> str | None:
-    clean_map = {c.lower().strip().replace(" ", "_"): c for c in columns}
+    clean_map = {_normalize(c): c for c in columns}
+    # exact match on normalized name
     for cand in candidates:
         if cand in clean_map:
             return clean_map[cand]
+    # substring match: candidate appears inside a normalized column name
+    for cand in candidates:
+        for norm, orig in clean_map.items():
+            if cand in norm:
+                return orig
     return None
 
 
 def standardize_series(df: pd.DataFrame, zone: str, value_name: str) -> pd.Series:
-    """Return hourly UTC series from raw table."""
+    """Return hourly UTC series from raw table.
+
+    Handles ENTSO-E range timestamps (``"DD/MM/YYYY HH:MM:SS - ..."``),
+    CET/CEST time-zone columns, and quarter-hourly to hourly aggregation.
+    """
     cols = list(df.columns)
     time_col = _find_column(cols, DEFAULT_TIME_COLS)
     if time_col is None:
@@ -69,12 +93,37 @@ def standardize_series(df: pd.DataFrame, zone: str, value_name: str) -> pd.Serie
 
     value_col = _find_column(cols, DEFAULT_VALUE_COLS)
     if value_col is None:
-        numeric_candidates = [c for c in cols if c != time_col]
+        # pick first column whose values are mostly numeric
+        numeric_candidates = [
+            c for c in cols
+            if c != time_col
+            and pd.to_numeric(df[c], errors="coerce").notna().sum() > len(df) * 0.5
+        ]
         if not numeric_candidates:
             raise ValueError(f"No value column found for zone={zone}")
         value_col = numeric_candidates[0]
 
-    times = pd.to_datetime(df[time_col], utc=True, errors="coerce")
+    # --- timestamp handling ---------------------------------------------------
+    raw_times = df[time_col].astype(str)
+
+    # ENTSO-E range format: "01/01/2025 00:00:00 - 01/01/2025 00:15:00"
+    if raw_times.str.contains(' - ', na=False).any():
+        raw_times = raw_times.str.split(' - ').str[0].str.strip()
+
+    times = pd.to_datetime(raw_times, dayfirst=True, errors="coerce")
+
+    # Detect source timezone from column header
+    col_upper = time_col.upper()
+    if "CET" in col_upper or "CEST" in col_upper:
+        try:
+            times = times.dt.tz_localize("CET", ambiguous="infer", nonexistent="shift_forward")
+        except Exception:
+            times = times.dt.tz_localize("CET", ambiguous=True, nonexistent="shift_forward")
+        times = times.dt.tz_convert("UTC")
+    elif times.dt.tz is None:
+        times = times.dt.tz_localize("UTC")
+
+    # --- value handling -------------------------------------------------------
     values = pd.to_numeric(df[value_col], errors="coerce")
 
     out = pd.Series(values.values, index=times, name=zone)

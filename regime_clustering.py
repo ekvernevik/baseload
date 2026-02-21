@@ -53,7 +53,7 @@ def main() -> None:
     plt.savefig(paths["figures"] / "regime_calendar.png", dpi=150)
     plt.close()
 
-    trend = daily.groupby([daily.index.to_period("M"), "cluster"]).size().unstack(fill_value=0)
+    trend = daily.groupby([daily.index.tz_localize(None).to_period("M"), "cluster"]).size().unstack(fill_value=0)
     trend.index = trend.index.astype(str)
     trend.plot(kind="bar", stacked=True, figsize=(10, 4), colormap="tab10")
     plt.title("Regime frequency trend")

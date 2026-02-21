@@ -64,7 +64,7 @@ def main() -> None:
     rows = []
     traces = {}
     for zone in sorted(prices.columns):
-        rev, throughput, cycles, soc, ch, dis = solve_pf(prices[zone].fillna(method="ffill").fillna(0), p_mw, e_mwh, eta, soc_min, soc_max, tcost)
+        rev, throughput, cycles, soc, ch, dis = solve_pf(prices[zone].ffill().fillna(0), p_mw, e_mwh, eta, soc_min, soc_max, tcost)
         rows.append(
             {
                 "zone": zone,
