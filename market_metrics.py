@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Script 3: compute market statistics and basic price visualizations."""
+from __future__ import annotations
+
+import argparse
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+from baseload.pipeline_utils import ensure_dirs, load_config, safe_div
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    paths = ensure_dirs(cfg)
+    prices = pd.read_parquet(paths["processed"] / "prices.parquet")
+
+    records = []
+    for zone in sorted(prices.columns):
+        s = prices[zone].dropna()
+        p50 = s.quantile(0.5)
+        rec = {
+            "zone": zone,
+            "mean": s.mean(),
+            "std": s.std(ddof=0),
+            "iqr": s.quantile(0.75) - s.quantile(0.25),
+            "p5": s.quantile(0.05),
+            "p50": p50,
+            "p95": s.quantile(0.95),
+            "p99": s.quantile(0.99),
+            "negative_price_freq": (s < 0).mean(),
+            "tail_ratio": safe_div(s.quantile(0.99), p50),
+        }
+        records.append(rec)
+    stats = pd.DataFrame(records).sort_values("zone").reset_index(drop=True)
+    stats.to_parquet(paths["tables"] / "zone_stats.parquet")
+
+    plt.figure(figsize=(12, 4))
+    plt.imshow(prices.T, aspect="auto", interpolation="nearest")
+    plt.yticks(range(len(prices.columns)), prices.columns)
+    plt.colorbar(label="€/MWh")
+    plt.title("Price heatmap")
+    plt.tight_layout()
+    plt.savefig(paths["figures"] / "price_heatmap.png", dpi=150)
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    for zone in sorted(prices.columns):
+        vals = prices[zone].dropna().sort_values(ascending=False).reset_index(drop=True)
+        plt.plot(vals.values, label=zone)
+    plt.title("Price duration curves")
+    plt.xlabel("Hour rank")
+    plt.ylabel("€/MWh")
+    plt.legend(ncol=2, fontsize=8)
+    plt.tight_layout()
+    plt.savefig(paths["figures"] / "price_duration_curves.png", dpi=150)
+    plt.close()
+
+
+if __name__ == "__main__":
+    main()
