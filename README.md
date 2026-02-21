@@ -30,6 +30,19 @@ The project organizes thinking into distinct areas:
 
 This is **not** a full-scale dispatch model, power-flow simulation, or market optimization tool. It is a scaffold for reasoning about grid systems, their constraints, and the role of storage in managing stress conditions.
 
+## How to run the demo
+
+Run from repository root with one config file:
+
+1. `python ingest_entsoe.py --config configs/demo.yaml`
+2. `python validate_data.py --config configs/demo.yaml`
+3. `python market_metrics.py --config configs/demo.yaml`
+4. `python spreads_congestion.py --config configs/demo.yaml`
+5. `python regime_clustering.py --config configs/demo.yaml`
+6. `python bess_valuation_pf.py --config configs/demo.yaml`
+7. `python bess_valuation_rh.py --config configs/demo.yaml`
+8. `python alerts_and_memo.py --config configs/demo.yaml`
+
 ---
 
 For detailed information about each folder, see the README.md files within them.
