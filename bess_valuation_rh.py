@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config
+from baseload.io import read_prices, read_valuation_pf, write_valuation_rh
 
 try:
     import pulp
@@ -62,8 +63,8 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = pd.read_parquet(paths["processed"] / "prices.parquet")
-    pf = pd.read_parquet(paths["tables"] / "valuation_pf.parquet").set_index("zone")
+    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
+    pf = read_valuation_pf(paths).set_index("zone")  # validates against VALUATION_PF_SCHEMA on load
 
     bcfg = cfg.get("bess", {})
     p_mw = float(bcfg.get("p_mw", 50))
@@ -83,7 +84,7 @@ def main() -> None:
         soc_store[zone] = soc
 
     out = pd.DataFrame(rows).sort_values("rolling_revenue", ascending=False).reset_index(drop=True)
-    out.to_parquet(paths["tables"] / "valuation_rh.parquet")
+    write_valuation_rh(out, paths)  # validates against VALUATION_RH_SCHEMA before writing
 
     plt.figure(figsize=(8, 4))
     x = range(len(out))

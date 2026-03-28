@@ -8,6 +8,8 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config, write_json
 
+from baseload.io import read_parquet, read_valuation_pf, read_valuation_rh
+
 
 def classify(value: float, yellow: float, red: float, high_bad: bool = True) -> str:
     if high_bad:
@@ -35,8 +37,8 @@ def main() -> None:
     zs = pd.read_parquet(paths["tables"] / "zone_stats.parquet")
     sp = pd.read_parquet(paths["tables"] / "spread_metrics.parquet")
     rg = pd.read_parquet(paths["tables"] / "regime_profiles.parquet")
-    pf = pd.read_parquet(paths["tables"] / "valuation_pf.parquet")
-    rh = pd.read_parquet(paths["tables"] / "valuation_rh.parquet")
+    pf = read_valuation_pf(paths)   # validates against VALUATION_PF_SCHEMA on load
+    rh = read_valuation_rh(paths)   # validates against VALUATION_RH_SCHEMA on load
 
     alerts = {}
     iqr_median = float(zs["iqr"].median())

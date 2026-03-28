@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config, safe_div
+from baseload.io import read_prices, write_parquet
 
 
 def main() -> None:
@@ -17,7 +18,8 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = pd.read_parquet(paths["processed"] / "prices.parquet")
+    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
+    
 
     records = []
     for zone in sorted(prices.columns):
@@ -37,7 +39,7 @@ def main() -> None:
         }
         records.append(rec)
     stats = pd.DataFrame(records).sort_values("zone").reset_index(drop=True)
-    stats.to_parquet(paths["tables"] / "zone_stats.parquet")
+    write_parquet(stats, paths["tables"] / "zone_stats.parquet")
 
     plt.figure(figsize=(12, 4))
     plt.imshow(prices.T, aspect="auto", interpolation="nearest")

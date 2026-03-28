@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config, sha256_file, write_json
+from baseload.io import read_prices
 
 
 def main() -> None:
@@ -21,7 +22,7 @@ def main() -> None:
     if not prices_path.exists():
         raise FileNotFoundError("Missing processed prices parquet. Run ingest_entsoe.py first.")
 
-    prices = pd.read_parquet(prices_path)
+    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
     issues = []
     expected_idx = pd.date_range(prices.index.min(), prices.index.max(), freq="h", tz="UTC")
     missing_hours = expected_idx.difference(prices.index)

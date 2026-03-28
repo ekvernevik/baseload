@@ -9,6 +9,8 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config
 
+from baseload.io import read_prices, write_valuation_pf
+
 try:
     import pulp
 except ImportError as exc:  # pragma: no cover
@@ -52,7 +54,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = pd.read_parquet(paths["processed"] / "prices.parquet")
+    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
     bcfg = cfg.get("bess", {})
     p_mw = float(bcfg.get("p_mw", 50))
     e_mwh = float(bcfg.get("e_mwh", 200))
@@ -78,7 +80,7 @@ def main() -> None:
         traces[zone] = {"soc": soc, "ch": ch, "dis": dis}
 
     valuation = pd.DataFrame(rows).sort_values("net_revenue", ascending=False).reset_index(drop=True)
-    valuation.to_parquet(paths["tables"] / "valuation_pf.parquet")
+    write_valuation_pf(valuation, paths)  # validates against VALUATION_PF_SCHEMA before writing
 
     plt.figure(figsize=(8, 4))
     plt.bar(valuation["zone"], valuation["eur_per_kw_yr"])

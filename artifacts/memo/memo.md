@@ -1,12 +1,12 @@
-# BESS-GRR1
+# Baseload Phase 1 MVP Memo
 
 ## Recommended zones (PF)
-- NO1: 47.66 €/kW-yr
-- NO2: 46.30 €/kW-yr
+- NO1: 0.00 €/kW-yr
+- NO2: 0.00 €/kW-yr
 
 ## Recommended zones (RH)
-- NO1: 35.74 €/kW-yr (penalty 25.0%)
-- NO2: 34.73 €/kW-yr (penalty 25.0%)
+- NO1: 47.59 €/kW-yr (penalty 0.1%)
+- NO2: 46.19 €/kW-yr (penalty 0.2%)
 
 ## Key evidence
 - Congestion signal: see `artifacts/figures/spread_heatmap.png`.
@@ -14,10 +14,10 @@
 
 ## Key risks and actions
 - volatility_compression: green — Prefer zones with durable spread opportunities; reduce merchant-only exposure.
-- tail_dependence: red — Stress-test downside under clipped tails and add downside reserves.
-- congestion_persistence: red — Prioritize siting near persistent constrained interfaces.
+- tail_dependence: green — Stress-test downside under clipped tails and add downside reserves.
+- congestion_persistence: green — Prioritize siting near persistent constrained interfaces.
 - oversupply_risk: green — Pair strategy with capture-ready charging and ancillary optionality.
-- foresight_risk: yellow — Invest in short-term forecasting and dispatch tooling before scaling.
+- foresight_risk: green — Invest in short-term forecasting and dispatch tooling before scaling.
 
 ## What would change our mind
 - Sustained compression in spread/separation metrics for top zones.

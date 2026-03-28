@@ -7,6 +7,8 @@ from pathlib import Path
 
 from baseload.pipeline_utils import align_hourly, ensure_dirs, load_config, parse_csv_flexible, standardize_series
 
+from baseload.io import write_prices, write_parquet
+
 
 def load_zone_table(input_cfg: dict, raw_dir: Path, start: str, end: str, label: str):
     zone_map = {}
@@ -32,7 +34,7 @@ def main() -> None:
         raise ValueError("Config must define inputs.prices with per-zone CSV paths")
 
     prices = load_zone_table(inputs["prices"], paths["raw"], start, end, label="price")
-    prices.to_parquet(paths["processed"] / "prices.parquet")
+    write_prices(prices, paths)  # validates against PRICES_SCHEMA before writing
 
     if inputs.get("load"):
         load = load_zone_table(inputs["load"], paths["raw"], start, end, label="load")
