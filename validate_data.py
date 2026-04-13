@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config, sha256_file, write_json
+from baseload.io import read_prices
 
 
 def main() -> None:
@@ -21,7 +22,7 @@ def main() -> None:
     if not prices_path.exists():
         raise FileNotFoundError("Missing processed prices parquet. Run ingest_entsoe.py first.")
 
-    prices = pd.read_parquet(prices_path)
+    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
     issues = []
     expected_idx = pd.date_range(prices.index.min(), prices.index.max(), freq="h", tz="UTC")
     missing_hours = expected_idx.difference(prices.index)
@@ -32,6 +33,10 @@ def main() -> None:
     if str(prices.index.tz) != "UTC":
         issues.append(f"Index timezone is not UTC: {prices.index.tz}")
 
+    # 6σ threshold rather than 3σ: Nordic prices have genuine fat tails
+    # (hydro scarcity spikes, interconnector trips). 3σ would flag real events
+    # as outliers. 6σ catches unit errors or data corruption while ignoring
+    # legitimate extreme prices.
     outliers = ((prices - prices.mean()) / prices.std(ddof=0)).abs() > 6
     outlier_count = int(outliers.sum().sum())
     issues.append(f"Outliers (>6σ): {outlier_count}")
@@ -45,6 +50,8 @@ def main() -> None:
         lines.append("No issues found.")
     val_md.write_text("\n".join(lines), encoding="utf-8")
 
+    # SHA256 checksums on input parquets: if downstream results look wrong,
+    # provenance.json confirms whether the data changed between pipeline runs.
     prov = {
         "config": {
             "zones": cfg.get("zones", []),
@@ -54,7 +61,7 @@ def main() -> None:
             str(prices_path): sha256_file(prices_path),
         },
     }
-    for opt in ["load.parquet", "gen.parquet"]:
+    for opt in ["load.parquet", "actgen.parquet"]:
         p = paths["processed"] / opt
         if p.exists():
             prov["files"][str(p)] = sha256_file(p)

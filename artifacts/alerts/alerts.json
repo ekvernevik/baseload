@@ -20,8 +20,8 @@
     "action": "Pair strategy with capture-ready charging and ancillary optionality."
   },
   "foresight_risk": {
-    "metric": 25.0,
-    "severity": "yellow",
+    "metric": 0.41760916214856914,
+    "severity": "green",
     "action": "Invest in short-term forecasting and dispatch tooling before scaling."
   }
 }

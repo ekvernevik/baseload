@@ -8,8 +8,14 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config, write_json
 
+from baseload.io import read_parquet, read_valuation_pf, read_valuation_rh
+
 
 def classify(value: float, yellow: float, red: float, high_bad: bool = True) -> str:
+    # Convert a raw metric value to an alert severity label using threshold bands.
+    # - For high_bad=True, larger values are worse (upside risk).
+    # - For high_bad=False, smaller values are worse (downside risk).
+    # Threshold priority: red over yellow; green otherwise.
     if high_bad:
         if value >= red:
             return "red"
@@ -32,13 +38,15 @@ def main() -> None:
     paths = ensure_dirs(cfg)
     th = cfg.get("thresholds", {})
 
-    zs = pd.read_parquet(paths["tables"] / "zone_stats.parquet")
-    sp = pd.read_parquet(paths["tables"] / "spread_metrics.parquet")
-    rg = pd.read_parquet(paths["tables"] / "regime_profiles.parquet")
-    pf = pd.read_parquet(paths["tables"] / "valuation_pf.parquet")
-    rh = pd.read_parquet(paths["tables"] / "valuation_rh.parquet")
+    zs = read_parquet(paths["tables"] / "zone_stats.parquet")
+    sp = read_parquet(paths["tables"] / "spread_metrics.parquet")
+    rg = read_parquet(paths["tables"] / "regime_profiles.parquet")
+    pf = read_valuation_pf(paths)   # validates against VALUATION_PF_SCHEMA on load
+    rh = read_valuation_rh(paths)   # validates against VALUATION_RH_SCHEMA on load
 
     alerts = {}
+
+    # Volatility compression: lower IQR is worse when high_bad=False.
     iqr_median = float(zs["iqr"].median())
     alerts["volatility_compression"] = {
         "metric": iqr_median,
@@ -46,6 +54,7 @@ def main() -> None:
         "action": "Prefer zones with durable spread opportunities; reduce merchant-only exposure.",
     }
 
+    # Tail dependence risk: max tail ratio with high values being bad.
     tail = float(zs["tail_ratio"].max())
     alerts["tail_dependence"] = {
         "metric": tail,
@@ -53,6 +62,7 @@ def main() -> None:
         "action": "Stress-test downside under clipped tails and add downside reserves.",
     }
 
+    # Congestion persistence risk: how many consecutive hours are separated by a spread.
     cong = float(sp["max_consecutive_separation_h"].max()) if len(sp) else 0.0
     alerts["congestion_persistence"] = {
         "metric": cong,
@@ -60,6 +70,7 @@ def main() -> None:
         "action": "Prioritize siting near persistent constrained interfaces.",
     }
 
+    # Oversupply risk: maximum of zone negative-price frequency and regime negative-price share.
     over = float(max(zs["negative_price_freq"].max(), rg["neg_price_share"].max()))
     alerts["oversupply_risk"] = {
         "metric": over,
@@ -67,6 +78,7 @@ def main() -> None:
         "action": "Pair strategy with capture-ready charging and ancillary optionality.",
     }
 
+    # Foresight risk: maximum penalty percent from RH valuation outcomes.
     foresight = float(rh["penalty_pct"].max())
     alerts["foresight_risk"] = {
         "metric": foresight,
@@ -83,18 +95,42 @@ def main() -> None:
 
     pf_top = pf.sort_values("eur_per_kw_yr", ascending=False).head(2)
     rh_top = rh.sort_values("eur_per_kw_yr", ascending=False).head(2)
+
+    # Load NTC-constrained network valuation if available (produced by bess_valuation_pf.py).
+    # ntc_discount_pct = how much value the network takes away from unconstrained arbitrage.
+    # High discount → BESS can only trade when local zone surplus/deficit aligns with
+    # price peaks; the theoretical arbitrage value overstates what's capturable.
+    ntc_section = []
+    comp_path = paths["tables"] / "valuation_pf_comparison.parquet"
+    if comp_path.exists():
+        comp = read_parquet(comp_path).sort_values("ntc_discount_pct", ascending=True)
+        ntc_section = [
+            "",
+            "## NTC network discount (unconstrained vs network-constrained)",
+            "Measures how much arbitrage value the NTC limits remove from each zone.",
+            "Low discount = battery can capture most theoretical value locally.",
+            "",
+            *[
+                f"- {r.zone}: {r.eur_per_kw_yr_unc:.1f} → {r.eur_per_kw_yr_net:.1f} €/kW-yr "
+                f"({r.ntc_discount_pct:.0f}% discount)"
+                for r in comp.itertuples()
+            ],
+        ]
+
     memo = [
         "# Baseload Phase 1 MVP Memo",
         "",
-        "## Recommended zones (PF)",
+        "## Recommended zones (unconstrained PF)",
         *[f"- {r.zone}: {r.eur_per_kw_yr:.2f} €/kW-yr" for r in pf_top.itertuples()],
         "",
-        "## Recommended zones (RH)",
-        *[f"- {r.zone}: {r.eur_per_kw_yr:.2f} €/kW-yr (penalty {r.penalty_pct:.1f}%)" for r in rh_top.itertuples()],
+        "## Recommended zones (rolling horizon, 24h lookahead)",
+        *[f"- {r.zone}: {r.eur_per_kw_yr:.2f} €/kW-yr (foresight penalty {r.penalty_pct:.1f}%)" for r in rh_top.itertuples()],
+        *ntc_section,
         "",
         "## Key evidence",
         "- Congestion signal: see `artifacts/figures/spread_heatmap.png`.",
         "- Regime signal: see `artifacts/figures/regime_calendar.png`.",
+        "- NTC dispatch: see `artifacts/figures/valuation_pf_ranking.png`.",
         "",
         "## Key risks and actions",
         *[f"- {k}: {v['severity']} — {v['action']}" for k, v in alerts.items()],
@@ -103,6 +139,7 @@ def main() -> None:
         "- Sustained compression in spread/separation metrics for top zones.",
         "- RH penalty remains high after forecast/control improvements.",
         "- Regime mix shifts away from volatility-rich days for multiple months.",
+        "- NTC discount narrows significantly (interconnector upgrades or policy change).",
     ]
     (paths["memo"] / "memo.md").write_text("\n".join(memo), encoding="utf-8")
 

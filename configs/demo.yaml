@@ -9,11 +9,29 @@ paths:
   artifacts_dir: artifacts
 inputs:
   prices:
-    NO1: no1_prices.csv
-    NO2: no2_prices.csv
-    NO3: no3_prices.csv
-    NO4: no4_prices.csv
-    NO5: no5_prices.csv
+    NO1: prices/no1_prices.csv
+    NO2: prices/no2_prices.csv
+    NO3: prices/no3_prices.csv
+    NO4: prices/no4_prices.csv
+    NO5: prices/no5_prices.csv
+  load:
+    NO1: load/no1_load.csv
+    NO2: load/no2_load.csv
+    NO3: load/no3_load.csv
+    NO4: load/no4_load.csv
+    NO5: load/no5_load.csv
+  actgen:
+    NO1: actgen_ppt/no1_actgen_ppt.csv
+    NO2: actgen_ppt/no2_actgen_ppt.csv
+    NO3: actgen_ppt/no3_actgen_ppt.csv
+    NO4: actgen_ppt/no4_actgen_ppt.csv
+    NO5: actgen_ppt/no5_actgen_ppt.csv
+  transmission:
+    NO1: transmission/no1_transmission.csv
+    NO2: transmission/no2_transmission.csv
+    NO3: transmission/no3_transmission.csv
+    NO4: transmission/no4_transmission.csv
+    NO5: transmission/no5_transmission.csv
 pairs:
   - NO1-NO2
   - NO2-NO3
@@ -44,3 +62,30 @@ bess:
 rolling:
   lookahead_h: 24
   step_h: 1
+
+# ---------------------------------------------------------------------------
+# Supplemental data (run ingest_supplemental.py to populate)
+# ---------------------------------------------------------------------------
+supplemental:
+  # Threshold for causal attribution in congestion_model.py
+  hydro_surplus_threshold_pct: 70.0  # reservoir % fill above which → "hydro_surplus" label
+
+  hydro_reservoir:
+    # Option A: download CSV from Nord Pool and place at this path.
+    #   URL: https://www.nordpoolgroup.com/en/Market-data1/Power-system-data/hydro-reservoir1/ALL/Hourly/?view=table
+    csv_path: data/raw/hydro/nordpool_reservoir.csv
+    # Option B: Nord Pool Data Portal API (register at nordpoolgroup.com).
+    #   Set here or via NORDPOOL_API_KEY environment variable.
+    # api_key: ""
+
+  hydro_inflow:
+    # NVE HydAPI — free key at https://hydapi.nve.no/Users
+    # Find station IDs for your catchments at https://sildre.nve.no
+    # Set here or via NVE_API_KEY environment variable.
+    # api_key: ""
+    stations:
+      NO1: []   # e.g. ["12.171.0"]  Glomma at Elverum
+      NO2: []   # e.g. ["026.3.0"]   Otra at Vigeland
+      NO3: []   # e.g. ["122.9.0"]   Orkla
+      NO4: []   # e.g. ["163.5.0"]   Målselv
+      NO5: []   # e.g. ["072.5.0"]   Vosso

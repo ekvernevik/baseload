@@ -189,3 +189,113 @@ def safe_div(a: float, b: float) -> float:
     if b == 0 or np.isnan(b):
         return float("nan")
     return a / b
+
+
+# ---------------------------------------------------------------------------
+# Schema-aware I/O additions (Phase 1 data-contract extension)
+#
+# The functions below extend pipeline_utils with validated read/write
+# helpers. They delegate to the new src/data layer (schemas, validators, io)
+# so all schema logic lives in one place.
+# ---------------------------------------------------------------------------
+ 
+def read_artifact(
+    path: Path,
+    schema_name: str | None = None,
+    *,
+    validate: bool = True,
+) -> pd.DataFrame:
+    """Read any parquet artifact and optionally validate its schema.
+ 
+    This is a thin convenience wrapper around ``baseload.data.io.read_parquet``
+    that can be called directly from pipeline scripts without importing the
+    full data sub-package.
+ 
+    Parameters
+    ----------
+    path:
+        Path to the ``.parquet`` file.
+    schema_name:
+        Optional key into the schema registry (``"prices"``,
+        ``"valuation_pf"``, ``"valuation_rh"``).
+    validate:
+        Set ``False`` to skip validation (e.g. in exploratory notebooks).
+    """
+    from baseload.data.io import read_parquet  # lazy import keeps the module lightweight
+    return read_parquet(path, schema_name=schema_name, validate=validate)
+ 
+ 
+def write_artifact(
+    df: pd.DataFrame,
+    path: Path,
+    schema_name: str | None = None,
+    *,
+    validate: bool = True,
+    also_csv: bool = False,
+) -> None:
+    """Validate *df* and persist it to *path* as parquet.
+ 
+    Parameters
+    ----------
+    df:
+        DataFrame to save.
+    path:
+        Destination ``.parquet`` path (parent dirs created automatically).
+    schema_name:
+        Optional key into the schema registry.  Validation runs *before*
+        any bytes are written so a bad DataFrame never produces a corrupt
+        artifact.
+    validate:
+        Set ``False`` to skip validation.
+    also_csv:
+        When ``True`` also write a ``.csv`` alongside the parquet file.
+    """
+    from baseload.data.io import write_parquet  # lazy import
+    write_parquet(df, path, schema_name=schema_name, validate=validate, also_csv=also_csv)
+ 
+ 
+def assert_no_nulls(df: pd.DataFrame, context: str = "") -> None:
+    """Raise ``ValueError`` if *df* contains any null values.
+ 
+    Use this as a cheap early-exit guard immediately after loading raw data.
+ 
+    Parameters
+    ----------
+    df:
+        DataFrame to check.
+    context:
+        Short label included in the error message (e.g. script name or
+        column group) to make the origin clear.
+    """
+    null_counts = df.isnull().sum()
+    bad = null_counts[null_counts > 0]
+    if not bad.empty:
+        detail = ", ".join(f"{col}={n}" for col, n in bad.items())
+        prefix = f"[{context}] " if context else ""
+        raise ValueError(f"{prefix}Unexpected nulls found — {detail}")
+ 
+ 
+def assert_utc_index(df: pd.DataFrame, context: str = "") -> None:
+    """Raise ``ValueError`` if *df* does not have a UTC DatetimeIndex.
+ 
+    Parameters
+    ----------
+    df:
+        DataFrame whose index to check.
+    context:
+        Short label included in the error message.
+    """
+    idx = df.index
+    prefix = f"[{context}] " if context else ""
+    if not isinstance(idx, pd.DatetimeIndex):
+        raise ValueError(f"{prefix}Index must be a DatetimeIndex, got {type(idx).__name__}.")
+    if idx.tz is None:
+        raise ValueError(f"{prefix}DatetimeIndex must be timezone-aware (UTC expected).")
+    import pytz, datetime
+    tz = idx.tz
+    utc_aliases = {pytz.UTC, datetime.timezone.utc}
+    # also accept tzinfo whose zone string contains "UTC"
+    tz_str = str(tz)
+    if tz not in utc_aliases and "UTC" not in tz_str.upper():
+        raise ValueError(f"{prefix}DatetimeIndex timezone must be UTC, got '{tz}'.")
+
