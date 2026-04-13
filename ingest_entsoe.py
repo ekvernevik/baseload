@@ -34,15 +34,42 @@ def main() -> None:
         raise ValueError("Config must define inputs.prices with per-zone CSV paths")
 
     prices = load_zone_table(inputs["prices"], paths["raw"], start, end, label="price")
+
+    # Early check: warn if any zone is more than 50% NaN (likely a date range mismatch)
+    for zone in prices.columns:
+        nan_pct = prices[zone].isna().mean()
+        if nan_pct > 0.5:
+            raise ValueError(
+                f"Zone '{zone}' is {nan_pct:.0%} NaN after alignment — "
+                f"CSV data probably does not cover the configured date range "
+                f"({start} → {end})."
+            )
+
     write_prices(prices, paths)  # validates against PRICES_SCHEMA before writing
 
     if inputs.get("load"):
         load = load_zone_table(inputs["load"], paths["raw"], start, end, label="load")
-        load.to_parquet(paths["processed"] / "load.parquet")
+        for zone in load.columns:
+            nan_pct = load[zone].isna().mean()
+            if nan_pct > 0.5:
+                raise ValueError(
+                    f"Load zone '{zone}' is {nan_pct:.0%} NaN after alignment — "
+                    f"CSV data probably does not cover the configured date range "
+                    f"({start} → {end})."
+                )
+        write_parquet(load, paths["processed"] / "load.parquet", schema_name="load")
 
     if inputs.get("gen"):
         gen = load_zone_table(inputs["gen"], paths["raw"], start, end, label="gen")
-        gen.to_parquet(paths["processed"] / "gen.parquet")
+        for zone in gen.columns:
+            nan_pct = gen[zone].isna().mean()
+            if nan_pct > 0.5:
+                raise ValueError(
+                    f"Gen zone '{zone}' is {nan_pct:.0%} NaN after alignment — "
+                    f"CSV data probably does not cover the configured date range "
+                    f"({start} → {end})."
+                )
+        write_parquet(gen, paths["processed"] / "gen.parquet", schema_name="gen")
 
 
 if __name__ == "__main__":
