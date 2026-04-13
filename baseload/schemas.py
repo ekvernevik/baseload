@@ -1,86 +1,108 @@
 """Data schemas for the Baseload Phase 1 MVP pipeline.
 
 Each schema defines the expected columns, dtypes, units, and constraints for a
-pipeline artifact. Schemas are intentionally lightweight dataclasses so they can
-be imported anywhere without heavy dependencies.
+pipeline artifact.  Schemas are intentionally lightweight dataclasses so they
+can be imported anywhere without heavy dependencies.
 
-Data streams
-------------
-prices       : Day-ahead spot prices (EUR/MWh), all five NO zones, hourly UTC.
-               Source: ENTSO-E — Day-ahead prices.
-               Raw files : NO{1-5}_prices_2026.csv  (15-min, aggregated to 1h on ingest).
-               Processed : data/processed/prices.parquet  (wide, columns = zone names).
+Data streams and processed file layout
+---------------------------------------
+prices            data/processed/prices.parquet
+                  Wide, flat: columns = zone names (NO1-NO5), values = EUR/MWh.
 
-load         : Actual total load (MW), all five NO zones, hourly UTC.
-               Source: ENTSO-E — Actual Total Load.
-               Raw files : NO{1-5}_load_2025.csv  (already 1h resolution).
-               Processed : data/processed/load.parquet  (wide, columns = zone names).
+load              data/processed/load.parquet
+                  Wide, flat: columns = zone names (NO1-NO5), values = MW.
 
-gen          : Actual generation per production type (MW), hourly UTC.
-               Source: ENTSO-E — Actual Generation per Production Type.
-               Raw files : NO{1-5}_gen_2025.csv  (tall: one row per hour per type).
-               Processed : data/processed/gen_{zone}.parquet per zone
-                           (wide, columns = ENTSO-E production type names).
-               Note: only 9 of the 21 ENTSO-E types are ever non-zero in Norway;
-               the rest are allowed as extra columns but not schema-required.
+actgen            data/processed/actgen.parquet
+                  Wide, MultiIndex columns: level 0 = zone, level 1 = ENTSO-E
+                  production type name.  Values = MW.
+                  Level names: ["_zone", "_type"]  (set by pivot_table in
+                  load_actgen_table).
 
-transmission : Cross-border physical flows (MW), hourly UTC.
-               Source: ENTSO-E — Cross-Border Physical Flows.
-               Raw files : NO{1-5}_transmission_2025.csv  (tall: one row per hour per pair).
-               Processed : data/processed/transmission.parquet  (single combined wide file,
-                           columns = "OutArea>InArea" border pair strings, duplicates removed).
+transmission      data/processed/transmission.parquet
+                  Wide, flat: columns = "NOx-NOy" net-flow pair strings
+                  (lower-numbered zone first).  Values = MW net flow; positive
+                  means flow toward the higher-numbered zone, negative the reverse.
+
+external_balance  data/processed/external_balance.parquet
+                  Wide, flat: columns = zone names (NO1-NO5).
+                  Values = MW net external import; positive = importing,
+                  negative = exporting.
+
+Final artifacts   artifacts/tables/
+                  valuation_pf, valuation_rh.
 
 Artifact classification
 -----------------------
 Intermediate  data/processed/*.parquet  — consumed by downstream scripts only.
-Final         artifacts/tables/*.parquet + *.csv — delivered to end-users / reports.
+Final         artifacts/tables/*.parquet + *.csv — delivered to reports / end-users.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 # ---------------------------------------------------------------------------
-# Column descriptor
+# Column descriptor  (used in flat DataFrameSchema)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ColumnSchema:
-    """Describes a single column in a DataFrame schema."""
+    """Describes a single column in a flat DataFrame."""
     name: str
-    dtype: str                         # pandas dtype string, e.g. "float64", "datetime64[ns, UTC]"
-    nullable: bool = False             # whether NaN is allowed
-    min_value: float | None = None     # inclusive lower bound (numeric columns)
-    max_value: float | None = None     # inclusive upper bound (numeric columns)
-    unit: str = ""                     # physical unit for documentation, e.g. "EUR/MWh", "MW"
+    dtype: str                         # pandas dtype string, e.g. "float64"
+    nullable: bool = False
+    min_value: float | None = None     # inclusive lower bound
+    max_value: float | None = None     # inclusive upper bound
+    unit: str = ""                     # e.g. "EUR/MWh", "MW"
     description: str = ""
 
 
 # ---------------------------------------------------------------------------
-# DataFrame schema
+# Flat DataFrame schema
 # ---------------------------------------------------------------------------
 
 @dataclass
 class DataFrameSchema:
-    """Describes the expected structure of a DataFrame artifact."""
-    name: str                                        # human-readable label used in error messages
-    index_name: str | None = None                    # expected name of the index (None = don't check)
-    index_dtype: str | None = None                   # expected dtype of the index
+    """Describes the expected structure of a flat (single-level columns) DataFrame."""
+    name: str
+    index_name: str | None = None      # None = don't check
+    index_dtype: str | None = None
     columns: list[ColumnSchema] = field(default_factory=list)
-    allow_extra_columns: bool = True                 # if False, unknown columns raise an error
-    min_rows: int = 24                               # minimum number of rows expected
-    check_hourly_continuity: bool = False            # if True, validate no gaps in hourly DatetimeIndex
+    allow_extra_columns: bool = True
+    min_rows: int = 24
+    check_hourly_continuity: bool = False
+
+
+# ---------------------------------------------------------------------------
+# MultiIndex DataFrame schema  (used for actgen)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MultiIndexDataFrameSchema:
+    """Describes a DataFrame whose columns form a two-level MultiIndex.
+
+    Produced by ``load_actgen_table`` via ``pivot_table(columns=["_zone","_type"])``.
+    Level 0 = zone names, level 1 = ENTSO-E production type names.
+    """
+    name: str
+    index_name: str | None = None      # None = don't check (reindex loses the name)
+    index_dtype: str | None = None
+    min_rows: int = 24
+    check_hourly_continuity: bool = False
+    expected_level0: list[str] = field(default_factory=list)   # expected zone names
+    expected_level1: list[str] = field(default_factory=list)   # expected type names (subset)
+    level_names: list[str] = field(default_factory=list)       # e.g. ["_zone", "_type"]
+    min_value: float | None = None
+    max_value: float | None = None
+    unit: str = ""
 
 
 # ---------------------------------------------------------------------------
 # Intermediate artifact schemas  (data/processed/)
 # ---------------------------------------------------------------------------
 
-#: Hourly UTC day-ahead price table produced by ingest_entsoe.py.
-#: Index: DatetimeTZDtype("h", tz="UTC"), columns = zone names (float64 EUR/MWh).
-#: Norwegian prices can go negative (high hydro / wind export scenarios; NO4 reached
-#: −27 EUR/MWh in 2026).  Upper bound is generous to cover crisis-period spikes.
+#: Day-ahead spot prices, hourly UTC.
+#: Observed 2026 range: NO4 reached -27 EUR/MWh; upper bound covers crisis spikes.
 PRICES_SCHEMA = DataFrameSchema(
     name="prices",
     index_name="time",
@@ -93,14 +115,12 @@ PRICES_SCHEMA = DataFrameSchema(
         ColumnSchema("NO5", dtype="float64", nullable=True, min_value=-500.0, max_value=3000.0, unit="EUR/MWh"),
     ],
     allow_extra_columns=True,
-    min_rows=168,                   # at least one week of hourly data
+    min_rows=168,
     check_hourly_continuity=True,
 )
 
-#: Hourly UTC actual total load table produced by ingest_entsoe.py.
-#: Index: DatetimeTZDtype("h", tz="UTC"), columns = zone names (float64 MW).
-#: Observed 2025 range: NO1 1836–7169, NO2 2937–6052, NO3 2252–4667,
-#:                       NO4 1442–3370, NO5 953–3147 MW.  Upper bound is 2× observed max.
+#: Actual total load, hourly UTC.
+#: Observed 2025 maxima: NO1 7169, NO2 6052, NO3 4667, NO4 3370, NO5 3147 MW.
 LOAD_SCHEMA = DataFrameSchema(
     name="load",
     index_name="time",
@@ -117,81 +137,72 @@ LOAD_SCHEMA = DataFrameSchema(
     check_hourly_continuity=True,
 )
 
-#: Hourly UTC generation per production type, one processed file per zone.
-#: Columns are the raw ENTSO-E "Production Type" strings (kept as-is after pivot).
-#: Only the 9 types that are ever non-zero in any Norwegian zone are required;
-#: all are nullable because different zones have different active types.
-#: Observed 2025 maxima (across all zones):
-#:   Hydro Water Reservoir ~1810 MW, Hydro RoR ~1260 MW,
-#:   Wind Onshore ~380 MW, Hydro Pumped Storage ~80 MW, etc.
-#: Upper bounds set at 2-3× installed capacity for each category.
-GEN_SCHEMA = DataFrameSchema(
-    name="gen",
-    index_name="time",
+#: Actual generation per production type, hourly UTC.
+#: MultiIndex columns: level 0 = zone (NO1-NO5), level 1 = ENTSO-E type name.
+#: Level names = ["_zone", "_type"] as set by pivot_table in load_actgen_table.
+#: Not every (zone, type) combination exists — inactive pairs are simply absent.
+#: Generation is always non-negative; upper bound 20 000 MW covers total NO hydro capacity.
+GEN_SCHEMA = MultiIndexDataFrameSchema(
+    name="actgen",
+    index_name=None,            # pivot_table sets "_time"; reindex(idx) clears it
     index_dtype="datetime64[ns, UTC]",
-    columns=[
-        ColumnSchema("Hydro Water Reservoir",          dtype="float64", nullable=True, min_value=0.0, max_value=20000.0, unit="MW"),
-        ColumnSchema("Hydro Run-of-river and pondage", dtype="float64", nullable=True, min_value=0.0, max_value=20000.0, unit="MW"),
-        ColumnSchema("Hydro Pumped Storage",           dtype="float64", nullable=True, min_value=0.0, max_value=5000.0,  unit="MW"),
-        ColumnSchema("Wind Onshore",                   dtype="float64", nullable=True, min_value=0.0, max_value=10000.0, unit="MW"),
-        ColumnSchema("Wind Offshore",                  dtype="float64", nullable=True, min_value=0.0, max_value=5000.0,  unit="MW"),
-        ColumnSchema("Solar",                          dtype="float64", nullable=True, min_value=0.0, max_value=2000.0,  unit="MW"),
-        ColumnSchema("Fossil Gas",                     dtype="float64", nullable=True, min_value=0.0, max_value=5000.0,  unit="MW"),
-        ColumnSchema("Waste",                          dtype="float64", nullable=True, min_value=0.0, max_value=2000.0,  unit="MW"),
-        ColumnSchema("Other renewable",                dtype="float64", nullable=True, min_value=0.0, max_value=5000.0,  unit="MW"),
-    ],
-    allow_extra_columns=True,   # zero-generation types present in raw files are allowed
     min_rows=168,
     check_hourly_continuity=True,
+    expected_level0=["NO1", "NO2", "NO3", "NO4", "NO5"],
+    expected_level1=[
+        "Hydro Water Reservoir",
+        "Hydro Run-of-river and pondage",
+        "Hydro Pumped Storage",
+        "Wind Onshore",
+        "Wind Offshore",
+        "Solar",
+        "Fossil Gas",
+        "Waste",
+        "Other renewable",
+    ],
+    level_names=["_zone", "_type"],
+    min_value=0.0,
+    max_value=20000.0,
+    unit="MW",
 )
 
-#: Hourly UTC cross-border physical flows, single combined file for all zones.
-#: Columns are "OutArea>InArea" strings, e.g. "NO1>NO2".
-#: Physical flows are non-negative (direction is encoded in the column name).
-#: 30 active border pairs observed in 2025 data; all nullable because flow is
-#: zero on some hours.  Upper bound 5000 MW covers all Norwegian interconnectors.
-#: Includes flows to/from neighbouring countries: SE, DK, DE-LU, NL, GB, FI.
-TRANSMISSION_SCHEMA = DataFrameSchema(
+#: Internal NO-NO net physical flows, hourly UTC.
+#: Columns: "NOx-NOy" where x < y (lower zone number first).
+#: Values: net MW toward higher-numbered zone; negative = reverse direction.
+#: 6 internal pairs observed in 2025 data.
+TRANSMISSION_INTERNAL_SCHEMA = DataFrameSchema(
     name="transmission",
     index_name="time",
     index_dtype="datetime64[ns, UTC]",
     columns=[
-        # --- Internal Norwegian flows ---
-        ColumnSchema("NO1>NO2",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO2>NO1",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO1>NO3",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO3>NO1",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO1>NO5",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO5>NO1",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO2>NO5",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO5>NO2",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO3>NO4",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO4>NO3",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO3>NO5",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO5>NO3",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        # --- NO ↔ Sweden ---
-        ColumnSchema("NO1>SE3",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("SE3>NO1",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO3>SE2",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("SE2>NO3",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO4>SE1",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("SE1>NO4",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO4>SE2",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("SE2>NO4",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        # --- NO ↔ Continental Europe / UK ---
-        ColumnSchema("NO2>DE-LU",  dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("DE-LU>NO2",  dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO2>DK1",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("DK1>NO2",    dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO2>GB",     dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("GB>NO2",     dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO2>NL",     dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NL>NO2",     dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        # --- NO ↔ Finland ---
-        ColumnSchema("NO4>FI",     dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("FI>NO4",     dtype="float64", nullable=True, min_value=0.0, max_value=5000.0, unit="MW"),
+        ColumnSchema("NO1-NO2", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
+        ColumnSchema("NO1-NO3", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
+        ColumnSchema("NO1-NO5", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
+        ColumnSchema("NO2-NO5", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
+        ColumnSchema("NO3-NO4", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
+        ColumnSchema("NO3-NO5", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
     ],
-    allow_extra_columns=True,   # n/e pairs (NO1A) and any future additions are allowed
+    allow_extra_columns=True,
+    min_rows=168,
+    check_hourly_continuity=True,
+)
+
+#: Net external import balance per NO zone, hourly UTC.
+#: Columns: zone names NO1-NO5.
+#: Values: net MW import from outside Norway; positive = importing, negative = exporting.
+#: Includes all non-NO neighbours: SE, DK, DE-LU, NL, GB, FI.
+EXTERNAL_BALANCE_SCHEMA = DataFrameSchema(
+    name="external_balance",
+    index_name="time",
+    index_dtype="datetime64[ns, UTC]",
+    columns=[
+        ColumnSchema("NO1", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
+        ColumnSchema("NO2", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
+        ColumnSchema("NO3", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
+        ColumnSchema("NO4", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
+        ColumnSchema("NO5", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
+    ],
+    allow_extra_columns=False,
     min_rows=168,
     check_hourly_continuity=True,
 )
@@ -201,19 +212,17 @@ TRANSMISSION_SCHEMA = DataFrameSchema(
 # Final artifact schemas  (artifacts/tables/)
 # ---------------------------------------------------------------------------
 
-#: Perfect-foresight valuation table written by bess_valuation_pf.py.
 VALUATION_PF_SCHEMA = DataFrameSchema(
     name="valuation_pf",
     columns=[
         ColumnSchema("zone",          dtype="object",  nullable=True),
-        ColumnSchema("net_revenue",   dtype="float64", nullable=True, unit="EUR", description="Total revenue over period"),
+        ColumnSchema("net_revenue",   dtype="float64", nullable=True, unit="EUR"),
         ColumnSchema("eur_per_kw_yr", dtype="float64", nullable=True, min_value=0.0, unit="EUR/kW/yr"),
     ],
     allow_extra_columns=True,
     min_rows=1,
 )
 
-#: Rolling-horizon valuation table written by bess_valuation_rh.py.
 VALUATION_RH_SCHEMA = DataFrameSchema(
     name="valuation_rh",
     columns=[
@@ -229,16 +238,17 @@ VALUATION_RH_SCHEMA = DataFrameSchema(
 
 
 # ---------------------------------------------------------------------------
-# Registry – maps artifact stem → schema, used by io.py at read/write time
+# Registry
 # ---------------------------------------------------------------------------
 
-SCHEMA_REGISTRY: dict[str, DataFrameSchema] = {
+SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     # intermediate
-    "prices":        PRICES_SCHEMA,
-    "load":          LOAD_SCHEMA,
-    "gen":           GEN_SCHEMA,
-    "transmission":  TRANSMISSION_SCHEMA,
+    "prices":            PRICES_SCHEMA,
+    "load":              LOAD_SCHEMA,
+    "actgen":            GEN_SCHEMA,
+    "transmission":      TRANSMISSION_INTERNAL_SCHEMA,
+    "external_balance":  EXTERNAL_BALANCE_SCHEMA,
     # final
-    "valuation_pf":  VALUATION_PF_SCHEMA,
-    "valuation_rh":  VALUATION_RH_SCHEMA,
+    "valuation_pf":      VALUATION_PF_SCHEMA,
+    "valuation_rh":      VALUATION_RH_SCHEMA,
 }

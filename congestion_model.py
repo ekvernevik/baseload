@@ -22,6 +22,7 @@ import argparse
 import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config
+from baseload.io import read_prices, read_transmission, read_load, read_gen, read_external_balance, write_parquet
 
 # ---------------------------------------------------------------------------
 # Static grid topology: NTC capacity limits per internal NO zone pair (MW).
@@ -255,20 +256,21 @@ def main() -> None:
     paths = ensure_dirs(cfg)
 
     print("Loading core inputs...")
-    prices = pd.read_parquet(paths["processed"] / "prices.parquet")
-    transmission = pd.read_parquet(paths["processed"] / "transmission.parquet")
+    prices = read_prices(paths)
+    transmission = read_transmission(paths)
 
-    # Load supplemental inputs if they exist.
-    def _try_load(name: str) -> pd.DataFrame | None:
-        p = paths["processed"] / f"{name}.parquet"
-        if p.exists():
+    # Load supplemental inputs if they exist — validated through io wrappers.
+    def _try_load(reader, name: str) -> pd.DataFrame | None:
+        try:
+            df = reader(paths)
             print(f"  Found {name}.parquet")
-            return pd.read_parquet(p)
-        return None
+            return df
+        except FileNotFoundError:
+            return None
 
-    load_df = _try_load("load")
-    actgen_df = _try_load("actgen")
-    ext_bal_df = _try_load("external_balance")
+    load_df     = _try_load(read_load,             "load")
+    actgen_df   = _try_load(read_gen,              "actgen")
+    ext_bal_df  = _try_load(read_external_balance, "external_balance")
     temperature_df = _try_load("temperature")
     reservoir_df = _try_load("hydro_reservoir")
 
@@ -276,7 +278,7 @@ def main() -> None:
     shadow_prices = run_congestion_model(prices, transmission)
 
     out_path = paths["tables"] / "congestion_shadow_prices.parquet"
-    shadow_prices.to_parquet(out_path)
+    write_parquet(shadow_prices, out_path)
     print(f"Saved shadow prices -> {out_path}")
     print("Congested hours per pair (utilization >= 95%):")
     for col in shadow_prices.columns:
@@ -314,7 +316,7 @@ def main() -> None:
 
         if not attribution.empty:
             attr_path = paths["tables"] / "congestion_attribution.parquet"
-            attribution.to_parquet(attr_path)
+            write_parquet(attribution, attr_path)
             print(f"Saved attribution -> {attr_path}")
             print(f"  {len(attribution)} congested hour-pair records")
 

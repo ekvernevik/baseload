@@ -38,9 +38,9 @@ def main() -> None:
     paths = ensure_dirs(cfg)
     th = cfg.get("thresholds", {})
 
-    zs = pd.read_parquet(paths["tables"] / "zone_stats.parquet")
-    sp = pd.read_parquet(paths["tables"] / "spread_metrics.parquet")
-    rg = pd.read_parquet(paths["tables"] / "regime_profiles.parquet")
+    zs = read_parquet(paths["tables"] / "zone_stats.parquet")
+    sp = read_parquet(paths["tables"] / "spread_metrics.parquet")
+    rg = read_parquet(paths["tables"] / "regime_profiles.parquet")
     pf = read_valuation_pf(paths)   # validates against VALUATION_PF_SCHEMA on load
     rh = read_valuation_rh(paths)   # validates against VALUATION_RH_SCHEMA on load
 
@@ -103,7 +103,7 @@ def main() -> None:
     ntc_section = []
     comp_path = paths["tables"] / "valuation_pf_comparison.parquet"
     if comp_path.exists():
-        comp = pd.read_parquet(comp_path).sort_values("ntc_discount_pct", ascending=True)
+        comp = read_parquet(comp_path).sort_values("ntc_discount_pct", ascending=True)
         ntc_section = [
             "",
             "## NTC network discount (unconstrained vs network-constrained)",

@@ -61,7 +61,7 @@ def main() -> None:
             str(prices_path): sha256_file(prices_path),
         },
     }
-    for opt in ["load.parquet", "gen.parquet"]:
+    for opt in ["load.parquet", "actgen.parquet"]:
         p = paths["processed"] / opt
         if p.exists():
             prov["files"][str(p)] = sha256_file(p)

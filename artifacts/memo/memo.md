@@ -12,9 +12,9 @@
 Measures how much arbitrage value the NTC limits remove from each zone.
 Low discount = battery can capture most theoretical value locally.
 
-- NO4: 11.7 → 10.5 €/kW-yr (10% discount)
-- NO3: 22.2 → 15.4 €/kW-yr (30% discount)
-- NO5: 27.5 → 15.5 €/kW-yr (43% discount)
+- NO4: 11.7 → 10.6 €/kW-yr (10% discount)
+- NO3: 22.2 → 15.5 €/kW-yr (30% discount)
+- NO5: 27.5 → 15.6 €/kW-yr (43% discount)
 - NO1: 47.7 → 25.6 €/kW-yr (46% discount)
 - NO2: 46.3 → 23.4 €/kW-yr (50% discount)
 

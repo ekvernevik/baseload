@@ -10,7 +10,7 @@ import pandas as pd
 
 from baseload.pipeline_utils import align_hourly, ensure_dirs, load_config, parse_csv_flexible, standardize_series
 
-from baseload.io import write_prices, write_parquet
+from baseload.io import write_prices, write_parquet, write_gen, write_transmission, write_external_balance
 
 # Generation types that carry meaningful volume in the Norwegian grid.
 _RELEVANT_GEN_TYPES = {
@@ -292,7 +292,7 @@ def main() -> None:
 
     if inputs.get("actgen"):
         actgen = load_actgen_table(inputs["actgen"], paths["raw"], start, end)
-        _save_parquet(actgen, paths["processed"] / "actgen.parquet", "actgen")
+        write_gen(actgen, paths)  # validates against GEN_SCHEMA before writing
         print(f"Saved actgen -> {paths['processed'] / 'actgen.parquet'}  shape={actgen.shape}")
 
     if inputs.get("transmission"):
@@ -300,8 +300,8 @@ def main() -> None:
             inputs["transmission"], paths["raw"], start, end
         )
         _check_dst_gaps(transmission, "transmission")
-        _save_parquet(transmission, paths["processed"] / "transmission.parquet", "transmission")
-        _save_parquet(external_balance, paths["processed"] / "external_balance.parquet", "external_balance")
+        write_transmission(transmission, paths)          # validates against TRANSMISSION_INTERNAL_SCHEMA
+        write_external_balance(external_balance, paths)  # validates against EXTERNAL_BALANCE_SCHEMA
         print(f"Saved transmission -> shape={transmission.shape}")
         print(f"Saved external_balance -> shape={external_balance.shape}")
 

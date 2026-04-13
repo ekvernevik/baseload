@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from baseload.pipeline_utils import consecutive_true_max, ensure_dirs, load_config
+from baseload.io import read_prices, write_parquet
 
 
 def parse_pair(pair):
@@ -27,7 +28,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = pd.read_parquet(paths["processed"] / "prices.parquet")
+    prices = read_prices(paths)
 
     # Default separation threshold: 20 €/MWh. Below this, spread differences
     # can be explained by intra-day balancing noise rather than true congestion.
@@ -64,7 +65,7 @@ def main() -> None:
         )
 
     spread_metrics = pd.DataFrame(metrics).sort_values("pair").reset_index(drop=True)
-    spread_metrics.to_parquet(paths["tables"] / "spread_metrics.parquet")
+    write_parquet(spread_metrics, paths["tables"] / "spread_metrics.parquet")
 
     if spread_map:
         spread_df = pd.DataFrame(spread_map)

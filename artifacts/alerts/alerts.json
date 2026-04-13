@@ -1,26 +1,26 @@
 {
   "volatility_compression": {
-    "metric": NaN,
+    "metric": 27.2525,
     "severity": "green",
     "action": "Prefer zones with durable spread opportunities; reduce merchant-only exposure."
   },
   "tail_dependence": {
-    "metric": NaN,
-    "severity": "green",
+    "metric": 29.800509915014228,
+    "severity": "red",
     "action": "Stress-test downside under clipped tails and add downside reserves."
   },
   "congestion_persistence": {
-    "metric": 0.0,
-    "severity": "green",
+    "metric": 885.0,
+    "severity": "red",
     "action": "Prioritize siting near persistent constrained interfaces."
   },
   "oversupply_risk": {
-    "metric": NaN,
+    "metric": 0.016329793308210574,
     "severity": "green",
     "action": "Pair strategy with capture-ready charging and ancillary optionality."
   },
   "foresight_risk": {
-    "metric": 0.41760916574234747,
+    "metric": 0.41760916214856914,
     "severity": "green",
     "action": "Invest in short-term forecasting and dispatch tooling before scaling."
   }

@@ -16,7 +16,7 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config
 
-from baseload.io import read_prices, write_valuation_pf
+from baseload.io import read_prices, write_valuation_pf, read_load, read_gen, read_external_balance, write_parquet
 
 try:
     import pulp
@@ -197,8 +197,8 @@ def main() -> None:
     tcost = float(bcfg.get("throughput_cost", 0.0))
 
     # Load network inputs for constrained model
-    load_df = pd.read_parquet(paths["processed"] / "load.parquet")
-    actgen_raw = pd.read_parquet(paths["processed"] / "actgen.parquet")
+    load_df = read_load(paths)
+    actgen_raw = read_gen(paths)
     if isinstance(actgen_raw.columns, pd.MultiIndex):
         from norway_network import ZONES
         actgen = actgen_raw.T.groupby(level=0).sum().T[ZONES]
@@ -206,8 +206,10 @@ def main() -> None:
         from norway_network import ZONES
         actgen = actgen_raw[ZONES]
 
-    ext_bal_path = paths["processed"] / "external_balance.parquet"
-    external_balance = pd.read_parquet(ext_bal_path) if ext_bal_path.exists() else None
+    try:
+        external_balance = read_external_balance(paths)
+    except FileNotFoundError:
+        external_balance = None
 
     # -----------------------------------------------------------------------
     # Run both formulations per zone
@@ -256,7 +258,7 @@ def main() -> None:
 
     # Backwards-compatible output: valuation_pf.parquet stays (unconstrained)
     write_valuation_pf(val_unc, paths)  # validates against VALUATION_PF_SCHEMA before writing
-    val_net.to_parquet(paths["tables"] / "valuation_pf_network.parquet")
+    write_parquet(val_net, paths["tables"] / "valuation_pf_network.parquet")
 
     # Comparison table: one row per zone, both valuations side by side
     comp = val_unc[["zone", "eur_per_kw_yr"]].rename(columns={"eur_per_kw_yr": "eur_per_kw_yr_unc"})
@@ -265,7 +267,7 @@ def main() -> None:
         on="zone",
     )
     comp["ntc_discount_pct"] = 100 * (1 - comp["eur_per_kw_yr_net"] / comp["eur_per_kw_yr_unc"].replace(0, float("nan")))
-    comp.to_parquet(paths["tables"] / "valuation_pf_comparison.parquet")
+    write_parquet(comp, paths["tables"] / "valuation_pf_comparison.parquet")
     print("\nValuation comparison (€/kW-yr):")
     print(comp.to_string(index=False))
 

@@ -9,6 +9,7 @@ import pandas as pd
 from sklearn.cluster import KMeans
 
 from baseload.pipeline_utils import ensure_dirs, load_config
+from baseload.io import read_prices, write_parquet
 
 
 def main() -> None:
@@ -18,7 +19,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = pd.read_parquet(paths["processed"] / "prices.parquet")
+    prices = read_prices(paths)
     spread_metrics = paths["tables"] / "spread_metrics.parquet"
 
     # Daily aggregation: captures structural market states (high-hydro/spill,
@@ -53,7 +54,7 @@ def main() -> None:
     daily["cluster"] = km.fit_predict(daily.values)
 
     profiles = daily.groupby("cluster").mean(numeric_only=True).reset_index().sort_values("cluster")
-    profiles.to_parquet(paths["tables"] / "regime_profiles.parquet")
+    write_parquet(profiles, paths["tables"] / "regime_profiles.parquet")
 
     plt.figure(figsize=(12, 2.8))
     plt.scatter(daily.index, daily["cluster"], c=daily["cluster"], cmap="tab10", s=10)
