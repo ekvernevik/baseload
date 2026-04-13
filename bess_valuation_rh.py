@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Script 7: rolling-horizon BESS valuation and foresight penalty analysis."""
 from __future__ import annotations
@@ -17,38 +18,66 @@ except ImportError as exc:  # pragma: no cover
 
 
 def solve_window(price: pd.Series, p_mw: float, e_mwh: float, eta: float, soc0: float):
+    """Solve one lookahead LP window and return only the first-period decision.
+
+    Only the first action (ch[0], dis[0], soc[0]) is committed — the rest is
+    discarded. This is the receding-horizon principle: re-optimizing at each step
+    avoids myopic decisions while remaining causal (no future price information
+    leaks past the lookahead window).
+    """
     t = range(len(price))
     model = pulp.LpProblem("bess_rh", pulp.LpMaximize)
     ch = pulp.LpVariable.dicts("ch", t, lowBound=0, upBound=p_mw)
     dis = pulp.LpVariable.dicts("dis", t, lowBound=0, upBound=p_mw)
     soc = pulp.LpVariable.dicts("soc", t, lowBound=0.1 * e_mwh, upBound=0.9 * e_mwh)
+
     model += pulp.lpSum([price.iloc[i] * (dis[i] - ch[i]) for i in t])
+
     for i in t:
         if i == 0:
             model += soc[i] == soc0 + eta * ch[i] - dis[i] / eta
         else:
             model += soc[i] == soc[i - 1] + eta * ch[i] - dis[i] / eta
+
     model.solve(pulp.PULP_CBC_CMD(msg=False))
     if pulp.LpStatus[model.status] != "Optimal":
         raise RuntimeError("RH optimization failed")
+
     return ch[0].value(), dis[0].value(), soc[0].value()
 
 
 def run_rh(price: pd.Series, p_mw: float, e_mwh: float, eta: float, lookahead: int, step: int):
+    """Simulate realistic BESS dispatch using a receding-horizon LP.
+
+    Unlike perfect-foresight (PF), this only looks `lookahead` hours ahead at
+    each step — simulating what a real operator could see. The gap between PF
+    and RH revenue is the foresight penalty: how much value is lost due to
+    imperfect price forecasting. High penalty → forecast quality matters a lot
+    for this zone.
+
+    step > 1 re-uses the same first-period decision for multiple hours before
+    re-solving. This is an approximation that trades accuracy for speed.
+    step=1 (default) re-solves every hour — most accurate.
+    """
     soc = 0.5 * e_mwh
     ch, dis, soc_trace = [], [], []
     idx = list(price.index)
+
     for i in range(0, len(idx), step):
         j = min(i + lookahead, len(idx))
         win = price.iloc[i:j]
         if win.empty:
             break
         c0, d0, soc0 = solve_window(win, p_mw, e_mwh, eta, soc)
+
+        # Apply the first-period decision for each hour in this step chunk.
         for _ in range(min(step, len(idx) - i)):
             ch.append(c0)
             dis.append(d0)
             soc_trace.append(soc0)
+
         soc = soc0
+
     ch_s = pd.Series(ch[: len(price)], index=price.index)
     dis_s = pd.Series(dis[: len(price)], index=price.index)
     soc_s = pd.Series(soc_trace[: len(price)], index=price.index)
@@ -79,8 +108,17 @@ def main() -> None:
     for zone in sorted(prices.columns):
         rev, soc = run_rh(prices[zone].ffill().fillna(0), p_mw, e_mwh, eta, lookahead, step)
         pf_rev = float(pf.loc[zone, "net_revenue"])
+        # penalty_pct = how much PF beats RH as a fraction of PF revenue.
+        # High penalty → a real operator needs good forecasting to capture
+        # most of the theoretical value in this zone.
         penalty = 100 * (pf_rev - rev) / pf_rev if pf_rev else 0.0
-        rows.append({"zone": zone, "rolling_revenue": rev, "pf_revenue": pf_rev, "penalty_pct": penalty, "eur_per_kw_yr": rev / (p_mw * 1000)})
+        rows.append({
+            "zone": zone,
+            "rolling_revenue": rev,
+            "pf_revenue": pf_rev,
+            "penalty_pct": penalty,
+            "eur_per_kw_yr": rev / (p_mw * 1000),
+        })
         soc_store[zone] = soc
 
     out = pd.DataFrame(rows).sort_values("rolling_revenue", ascending=False).reset_index(drop=True)
@@ -97,6 +135,7 @@ def main() -> None:
     plt.savefig(paths["figures"] / "valuation_pf_vs_rh.png", dpi=150)
     plt.close()
 
+    # Show SOC for the best zone over a representative week.
     zone = out.iloc[0]["zone"]
     week_start = prices.index.min()
     week_end = week_start + pd.Timedelta(days=7)

@@ -46,3 +46,9 @@ Run from repository root with one config file:
 ---
 
 For detailed information about each folder, see the README.md files within them.
+
+## Sources
+
+Transparency Platform - most things
+OpenInfraMap - List of Power Plants in Norway
+WikiData - Coordinates of said Power Plants

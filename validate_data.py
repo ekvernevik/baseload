@@ -33,6 +33,10 @@ def main() -> None:
     if str(prices.index.tz) != "UTC":
         issues.append(f"Index timezone is not UTC: {prices.index.tz}")
 
+    # 6σ threshold rather than 3σ: Nordic prices have genuine fat tails
+    # (hydro scarcity spikes, interconnector trips). 3σ would flag real events
+    # as outliers. 6σ catches unit errors or data corruption while ignoring
+    # legitimate extreme prices.
     outliers = ((prices - prices.mean()) / prices.std(ddof=0)).abs() > 6
     outlier_count = int(outliers.sum().sum())
     issues.append(f"Outliers (>6σ): {outlier_count}")
@@ -46,6 +50,8 @@ def main() -> None:
         lines.append("No issues found.")
     val_md.write_text("\n".join(lines), encoding="utf-8")
 
+    # SHA256 checksums on input parquets: if downstream results look wrong,
+    # provenance.json confirms whether the data changed between pipeline runs.
     prov = {
         "config": {
             "zones": cfg.get("zones", []),
