@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# un-ignore exported pipeline data (blocked by root .gitignore's data/ rule)
+!public/data/
+!public/data/**
