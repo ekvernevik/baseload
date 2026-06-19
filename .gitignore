@@ -186,3 +186,11 @@ pyvenv.cfg
 pip-selfcheck.json
 bsld/
 data/
+
+### Project-specific ###
+# macOS finder cruft
+.DS_Store
+# Reference PDFs (research papers) — reference material, not code
+Papers/
+# Ad-hoc session dumps
+session_export.txt
