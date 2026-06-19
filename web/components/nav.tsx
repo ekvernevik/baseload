@@ -29,7 +29,7 @@ export function Nav() {
     >
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
         <span className="text-white font-semibold tracking-tight">Baseload</span>
-        <ul className="flex gap-8">
+        <ul className="flex items-center gap-8">
           {links.map((l) => (
             <li key={l.href}>
               <a
@@ -40,6 +40,14 @@ export function Nav() {
               </a>
             </li>
           ))}
+          <li>
+            <a
+              href="/login"
+              className="rounded-lg border border-white/20 px-4 py-1.5 text-sm text-white transition-colors hover:bg-white hover:text-black"
+            >
+              Sign in
+            </a>
+          </li>
         </ul>
       </div>
     </nav>
