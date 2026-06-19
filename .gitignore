@@ -194,3 +194,5 @@ data/
 Papers/
 # Ad-hoc session dumps
 session_export.txt
+# Personal per-developer session logs — not shared
+session-logs/
