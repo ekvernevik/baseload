@@ -196,3 +196,12 @@ Papers/
 session_export.txt
 # Personal per-developer session logs — not shared
 session-logs/
+
+### Web app ###
+# The Python venv/build patterns above (e.g. [Ll]ib, data/, var/, target/) are
+# unanchored and would silently hide Next.js source under web/ (web/lib,
+# web/app/api/data, ...). The web app is governed by its own web/.gitignore, so
+# re-include everything under web/ here. Must re-include directories (the **/
+# line) before their contents, or git won't recurse into a dir it excluded.
+!/web/**/
+!/web/**
