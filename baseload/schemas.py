@@ -28,6 +28,17 @@ external_balance  data/processed/external_balance.parquet
                   Values = MW net external import; positive = importing,
                   negative = exporting.
 
+mfrr_capacity     data/processed/mfrr_capacity.parquet
+mfrr_activation   data/processed/mfrr_activation.parquet
+afrr_capacity     data/processed/afrr_capacity.parquet
+afrr_activation   data/processed/afrr_activation.parquet
+                  Wide, flat: columns = "{zone}_{direction}_price" (EUR/MWh)
+                  and "{zone}_{direction}_volume" (MW), direction in
+                  {up, down}. Not every zone/direction trades — missing
+                  combinations are NaN. Activation volume is the average
+                  activated MW over the settlement period, as ENTSO-E
+                  publishes it, not cumulative MWh.
+
 Final artifacts   artifacts/tables/
                   valuation_pf, valuation_rh.
 
@@ -208,6 +219,38 @@ EXTERNAL_BALANCE_SCHEMA = DataFrameSchema(
 )
 
 
+#: Reserve-market (mFRR EAM / aFRR) capacity or activation series, hourly UTC.
+#: Columns per zone: "{zone}_up_price", "{zone}_up_volume",
+#: "{zone}_down_price", "{zone}_down_volume". All nullable — not every zone
+#: trades every direction. Price bounds are wider than day-ahead (-1000..5000
+#: EUR/MWh) since reserve/activation prices spike harder during scarcity.
+def build_reserve_schema(name: str, zones: list[str]) -> DataFrameSchema:
+    columns = []
+    for zone in zones:
+        for direction in ("up", "down"):
+            columns.append(
+                ColumnSchema(
+                    f"{zone}_{direction}_price", dtype="float64", nullable=True,
+                    min_value=-1000.0, max_value=5000.0, unit="EUR/MWh",
+                )
+            )
+            columns.append(
+                ColumnSchema(
+                    f"{zone}_{direction}_volume", dtype="float64", nullable=True,
+                    min_value=0.0, max_value=2000.0, unit="MW",
+                )
+            )
+    return DataFrameSchema(
+        name=name,
+        index_name="time",
+        index_dtype="datetime64[ns, UTC]",
+        columns=columns,
+        allow_extra_columns=True,
+        min_rows=168,
+        check_hourly_continuity=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Final artifact schemas  (artifacts/tables/)
 # ---------------------------------------------------------------------------
@@ -241,6 +284,12 @@ VALUATION_RH_SCHEMA = DataFrameSchema(
 # Registry
 # ---------------------------------------------------------------------------
 
+MFRR_CAPACITY_SCHEMA = build_reserve_schema("mfrr_capacity", ["NO1", "NO2", "NO3", "NO4", "NO5"])
+MFRR_ACTIVATION_SCHEMA = build_reserve_schema("mfrr_activation", ["NO1", "NO2", "NO3", "NO4", "NO5"])
+AFRR_CAPACITY_SCHEMA = build_reserve_schema("afrr_capacity", ["NO1", "NO2", "NO3", "NO4", "NO5"])
+AFRR_ACTIVATION_SCHEMA = build_reserve_schema("afrr_activation", ["NO1", "NO2", "NO3", "NO4", "NO5"])
+
+
 SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     # intermediate
     "prices":            PRICES_SCHEMA,
@@ -248,6 +297,10 @@ SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     "actgen":            GEN_SCHEMA,
     "transmission":      TRANSMISSION_INTERNAL_SCHEMA,
     "external_balance":  EXTERNAL_BALANCE_SCHEMA,
+    "mfrr_capacity":     MFRR_CAPACITY_SCHEMA,
+    "mfrr_activation":   MFRR_ACTIVATION_SCHEMA,
+    "afrr_capacity":     AFRR_CAPACITY_SCHEMA,
+    "afrr_activation":   AFRR_ACTIVATION_SCHEMA,
     # final
     "valuation_pf":      VALUATION_PF_SCHEMA,
     "valuation_rh":      VALUATION_RH_SCHEMA,

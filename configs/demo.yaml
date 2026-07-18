@@ -89,3 +89,21 @@ supplemental:
       NO3: []   # e.g. ["122.9.0"]   Orkla
       NO4: []   # e.g. ["163.5.0"]   Målselv
       NO5: []   # e.g. ["072.5.0"]   Vosso
+
+# ---------------------------------------------------------------------------
+# Reserve-market data (run ingest_reserves.py to populate) — mFRR EAM /
+# PICASSO aFRR CSV exports from ENTSO-E's Transparency Platform "Balancing"
+# domain. Uncomment and fill in once CSVs are downloaded to data/raw/.
+# Each artifact is independent — set only the ones you have data for.
+#
+# inputs:
+#   mfrr_capacity:
+#     NO1: reserves/no1_mfrr_capacity.csv
+#     NO2: reserves/no2_mfrr_capacity.csv
+#   mfrr_activation:
+#     NO1: reserves/no1_mfrr_activation.csv
+#     NO2: reserves/no2_mfrr_activation.csv
+#   afrr_capacity:
+#     NO1: reserves/no1_afrr_capacity.csv
+#   afrr_activation:
+#     NO1: reserves/no1_afrr_activation.csv
