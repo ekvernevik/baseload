@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from baseload.pipeline_utils import align_hourly, ensure_dirs, load_config, parse_csv_flexible, standardize_series
+from baseload.zones import pair_name, zones_from_cfg
 
 from baseload.io import write_prices, write_parquet, write_gen, write_transmission, write_external_balance
 
@@ -24,8 +25,6 @@ _RELEVANT_GEN_TYPES = {
     "Solar",
     "Wind Offshore",
 }
-
-_NO_ZONES = {"NO1", "NO2", "NO3", "NO4", "NO5"}
 
 
 def load_zone_table(input_cfg: dict, raw_dir: Path, start: str, end: str, label: str):
@@ -93,22 +92,41 @@ def load_actgen_table(input_cfg: dict, actgen_dir: Path, start: str, end: str):
     return pivoted.reindex(idx)
 
 
-def _extract_no_zone(area: str) -> str | None:
-    # "BZN|NO1" -> "NO1"; returns None for external zones (SE3, DK1, etc.)
-    m = re.search(r"NO[1-5]$", str(area))
-    return m.group() if m else None
+def _make_zone_extractor(zones: set[str]):
+    # Build a single regex alternation over the configured zone codes, e.g.
+    # "BZN|NO1" -> "NO1" for zones={"NO1",...}; returns None for zones outside
+    # the configured set (external areas like SE3, DK1, etc., unless those are
+    # themselves configured as internal zones).
+    if not zones:
+        pattern = None
+    else:
+        pattern = re.compile(
+            "(" + "|".join(re.escape(z) for z in sorted(zones, key=len, reverse=True)) + ")$"
+        )
+
+    def _extract_zone(area: str) -> str | None:
+        if pattern is None:
+            return None
+        m = pattern.search(str(area))
+        return m.group() if m else None
+
+    return _extract_zone
 
 
-def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str, end: str):
+def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str, end: str, zones: set[str]):
     # Long-format CSVs: one row per direction per interconnect per hour.
     # Each pair (e.g. NO1-NO2) appears in both zone files — deduplicate before computing
     # net flow.
     #
+    # `zones` is the set of internal zone codes (configured via cfg["zones"]) used
+    # to classify each flow endpoint as internal vs. external.
+    #
     # Returns two DataFrames:
-    #   internal  — one column per internal NO zone pair, net flow toward higher-numbered zone
-    #   external  — one column per NO zone, net external import (positive = importing)
+    #   internal  — one column per internal zone pair, net flow toward the higher-sorted zone
+    #   external  — one column per internal zone, net external import (positive = importing)
     idx = pd.date_range(start=start, end=end, freq="h", tz="UTC")
     all_frames = []
+    extract_zone = _make_zone_extractor(zones)
 
     for zone, rel_path in input_cfg.items():
         df = parse_csv_flexible(transmission_dir / rel_path)
@@ -121,21 +139,21 @@ def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str,
         df = df[[time_col, out_col, in_col, flow_col]].copy()
         df["_time"] = _parse_mtu(df[time_col])
         df["_flow"] = pd.to_numeric(df[flow_col], errors="coerce")
-        df["_from"] = df[out_col].apply(_extract_no_zone)
-        df["_to"] = df[in_col].apply(_extract_no_zone)
+        df["_from"] = df[out_col].apply(extract_zone)
+        df["_to"] = df[in_col].apply(extract_zone)
 
         all_frames.append(df[["_time", "_from", "_to", "_flow"]])
 
     combined = pd.concat(all_frames, ignore_index=True)
     combined = combined.dropna(subset=["_time", "_flow"])
 
-    # --- Internal NO-NO flows ------------------------------------------------
+    # --- Internal zone-to-zone flows ------------------------------------------
     internal = combined[
-        combined["_from"].isin(_NO_ZONES) & combined["_to"].isin(_NO_ZONES)
+        combined["_from"].isin(zones) & combined["_to"].isin(zones)
     ].copy()
     internal = internal.drop_duplicates(subset=["_time", "_from", "_to"])
     internal["_pair"] = internal.apply(
-        lambda r: f"{min(r['_from'], r['_to'])}-{max(r['_from'], r['_to'])}", axis=1
+        lambda r: pair_name(r["_from"], r["_to"]), axis=1
     )
     internal["_net"] = internal.apply(
         lambda r: r["_flow"] if r["_from"] < r["_to"] else -r["_flow"], axis=1
@@ -144,20 +162,20 @@ def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str,
     internal_df = net_internal.unstack("_pair").reindex(idx)
     internal_df.index.name = "time"
 
-    # --- External balance per NO zone ----------------------------------------
-    # Rows where exactly one side is a NO zone and the other is external (NaN).
+    # --- External balance per internal zone -----------------------------------
+    # Rows where exactly one side is an internal zone and the other is external (NaN).
     # Net import into a zone = sum of flows arriving - sum of flows leaving.
-    from_is_no = combined["_from"].isin(_NO_ZONES)
-    to_is_no = combined["_to"].isin(_NO_ZONES)
-    ext = combined[from_is_no ^ to_is_no].copy()
+    from_is_internal = combined["_from"].isin(zones)
+    to_is_internal = combined["_to"].isin(zones)
+    ext = combined[from_is_internal ^ to_is_internal].copy()
     # External rows appear in exactly one zone file, so no deduplication needed here.
 
-    # For each row: which NO zone is involved, and is the flow arriving (+) or leaving (-)?
+    # For each row: which internal zone is involved, and is the flow arriving (+) or leaving (-)?
     def _ext_zone_and_sign(row):
-        if row["_from"] in _NO_ZONES:
-            return row["_from"], -row["_flow"]   # leaving NO zone = negative import
+        if row["_from"] in zones:
+            return row["_from"], -row["_flow"]   # leaving internal zone = negative import
         else:
-            return row["_to"], row["_flow"]       # arriving at NO zone = positive import
+            return row["_to"], row["_flow"]       # arriving at internal zone = positive import
 
     parsed = [_ext_zone_and_sign(r) for _, r in ext.iterrows()]
     ext = ext.copy()
@@ -166,8 +184,8 @@ def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str,
     net_ext = ext.groupby(["_time", "_zone"])["_import"].sum()
     external_df = net_ext.unstack("_zone").reindex(idx)
     external_df.index.name = "time"
-    # Ensure all 5 zones are present even if some have no external connections.
-    for z in _NO_ZONES:
+    # Ensure all internal zones are present even if some have no external connections.
+    for z in zones:
         if z not in external_df.columns:
             external_df[z] = 0.0
 
@@ -255,6 +273,8 @@ def main() -> None:
     paths = ensure_dirs(cfg)
     start, end = _validate_date_range(cfg)
     inputs = cfg.get("inputs", {})
+    zones = zones_from_cfg(cfg)
+    pairs = cfg.get("pairs")
 
     if "prices" not in inputs:
         raise ValueError("Config must define inputs.prices with per-zone CSV paths")
@@ -273,7 +293,7 @@ def main() -> None:
             )
 
     _check_dst_gaps(prices, "prices")
-    write_prices(prices, paths)  # validates against PRICES_SCHEMA before writing
+    write_prices(prices, paths, zones=zones)  # validates against a schema built for `zones`
     print(f"Saved prices -> {paths['processed'] / 'prices.parquet'}  shape={prices.shape}")
 
     if inputs.get("load"):
@@ -287,21 +307,21 @@ def main() -> None:
                     f"({start} → {end})."
                 )
         _check_dst_gaps(load, "load")
-        write_parquet(load, paths["processed"] / "load.parquet", schema_name="load")
+        write_parquet(load, paths["processed"] / "load.parquet", schema_name="load", zones=zones)
         print(f"Saved load -> {paths['processed'] / 'load.parquet'}  shape={load.shape}")
 
     if inputs.get("actgen"):
         actgen = load_actgen_table(inputs["actgen"], paths["raw"], start, end)
-        write_gen(actgen, paths)  # validates against GEN_SCHEMA before writing
+        write_gen(actgen, paths, zones=zones)  # validates against a schema built for `zones`
         print(f"Saved actgen -> {paths['processed'] / 'actgen.parquet'}  shape={actgen.shape}")
 
     if inputs.get("transmission"):
         transmission, external_balance = load_transmission_table(
-            inputs["transmission"], paths["raw"], start, end
+            inputs["transmission"], paths["raw"], start, end, zones=set(zones)
         )
         _check_dst_gaps(transmission, "transmission")
-        write_transmission(transmission, paths)          # validates against TRANSMISSION_INTERNAL_SCHEMA
-        write_external_balance(external_balance, paths)  # validates against EXTERNAL_BALANCE_SCHEMA
+        write_transmission(transmission, paths, pairs=pairs)          # validates against a schema built for `pairs`
+        write_external_balance(external_balance, paths, zones=zones)  # validates against a schema built for `zones`
         print(f"Saved transmission -> shape={transmission.shape}")
         print(f"Saved external_balance -> shape={external_balance.shape}")
 
