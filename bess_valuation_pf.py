@@ -17,6 +17,7 @@ import pandas as pd
 from baseload.pipeline_utils import ensure_dirs, load_config
 
 from baseload.io import read_prices, write_valuation_pf, read_load, read_gen, read_external_balance, write_parquet
+from baseload.zones import zones_from_cfg
 
 try:
     import pulp
@@ -187,7 +188,8 @@ def main() -> None:
     # Set up paths, read data, and config BESS parameters from config file.
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
+    zones = zones_from_cfg(cfg)
+    prices = read_prices(paths, zones=zones)  # validates against a schema built for the configured zones
     bcfg = cfg.get("bess", {})
     p_mw = float(bcfg.get("p_mw", 50))
     e_mwh = float(bcfg.get("e_mwh", 200))
@@ -197,17 +199,15 @@ def main() -> None:
     tcost = float(bcfg.get("throughput_cost", 0.0))
 
     # Load network inputs for constrained model
-    load_df = read_load(paths)
-    actgen_raw = read_gen(paths)
+    load_df = read_load(paths, zones=zones)
+    actgen_raw = read_gen(paths, zones=zones)
     if isinstance(actgen_raw.columns, pd.MultiIndex):
-        from norway_network import ZONES
-        actgen = actgen_raw.T.groupby(level=0).sum().T[ZONES]
+        actgen = actgen_raw.T.groupby(level=0).sum().T[zones]
     else:
-        from norway_network import ZONES
-        actgen = actgen_raw[ZONES]
+        actgen = actgen_raw[zones]
 
     try:
-        external_balance = read_external_balance(paths)
+        external_balance = read_external_balance(paths, zones=zones)
     except FileNotFoundError:
         external_balance = None
 

@@ -9,6 +9,7 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config, safe_div
 from baseload.io import read_prices, write_parquet
+from baseload.zones import zones_from_cfg
 
 
 def main() -> None:
@@ -18,7 +19,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
+    prices = read_prices(paths, zones=zones_from_cfg(cfg))  # validates against a schema built for the configured zones
     
 
     records = []

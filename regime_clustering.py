@@ -10,6 +10,7 @@ from sklearn.cluster import KMeans
 
 from baseload.pipeline_utils import ensure_dirs, load_config
 from baseload.io import read_prices, write_parquet
+from baseload.zones import zones_from_cfg
 
 
 def main() -> None:
@@ -19,7 +20,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = read_prices(paths)
+    prices = read_prices(paths, zones=zones_from_cfg(cfg))
     spread_metrics = paths["tables"] / "spread_metrics.parquet"
 
     # Daily aggregation: captures structural market states (high-hydro/spill,
