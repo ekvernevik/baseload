@@ -284,12 +284,6 @@ VALUATION_RH_SCHEMA = DataFrameSchema(
 # Registry
 # ---------------------------------------------------------------------------
 
-MFRR_CAPACITY_SCHEMA = build_reserve_schema("mfrr_capacity", ["NO1", "NO2", "NO3", "NO4", "NO5"])
-MFRR_ACTIVATION_SCHEMA = build_reserve_schema("mfrr_activation", ["NO1", "NO2", "NO3", "NO4", "NO5"])
-AFRR_CAPACITY_SCHEMA = build_reserve_schema("afrr_capacity", ["NO1", "NO2", "NO3", "NO4", "NO5"])
-AFRR_ACTIVATION_SCHEMA = build_reserve_schema("afrr_activation", ["NO1", "NO2", "NO3", "NO4", "NO5"])
-
-
 SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     # intermediate
     "prices":            PRICES_SCHEMA,
@@ -297,10 +291,11 @@ SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     "actgen":            GEN_SCHEMA,
     "transmission":      TRANSMISSION_INTERNAL_SCHEMA,
     "external_balance":  EXTERNAL_BALANCE_SCHEMA,
-    "mfrr_capacity":     MFRR_CAPACITY_SCHEMA,
-    "mfrr_activation":   MFRR_ACTIVATION_SCHEMA,
-    "afrr_capacity":     AFRR_CAPACITY_SCHEMA,
-    "afrr_activation":   AFRR_ACTIVATION_SCHEMA,
+    # Reserve-market artifacts (mfrr_capacity, mfrr_activation, afrr_capacity,
+    # afrr_activation) are deliberately NOT registered here: their zone coverage
+    # is per-config (partial coverage is the norm), so a fixed NO1-NO5 schema
+    # would reject valid data. Build one via build_reserve_schema(name, zones)
+    # for the zones actually configured.
     # final
     "valuation_pf":      VALUATION_PF_SCHEMA,
     "valuation_rh":      VALUATION_RH_SCHEMA,

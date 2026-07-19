@@ -76,3 +76,29 @@ def test_afrr_activation_generalizes_to_other_zone(tmp_path: Path, idx: pd.Datet
 
     schema = build_reserve_schema("afrr_activation", ["SE3"])
     assert validate_dataframe(table, schema, raise_on_error=False) == []
+
+
+def test_partial_direction_coverage_still_validates(tmp_path: Path, idx: pd.DatetimeIndex):
+    """A zone whose CSV only trades one direction (e.g. no downward mFRR
+    capacity procured) must still produce all four columns — the untraded
+    direction as all-NaN — so schema validation passes."""
+    mtu = _mtu_range(idx)
+    df = pd.DataFrame({
+        "MTU": mtu,
+        "Direction": ["Up"] * len(idx),
+        "Price [EUR/MWh]": [25.0] * len(idx),
+        "Volume [MW]": [80.0] * len(idx),
+    })
+    (tmp_path / "no1_up_only.csv").write_text(df.to_csv(index=False))
+
+    table = load_reserve_table({"NO1": "no1_up_only.csv"}, tmp_path, START, str(END))
+
+    assert set(table.columns) == {
+        "NO1_up_price", "NO1_up_volume", "NO1_down_price", "NO1_down_volume",
+    }
+    assert (table["NO1_up_price"] == 25.0).all()
+    assert table["NO1_down_price"].isna().all()
+    assert table["NO1_down_volume"].isna().all()
+
+    schema = build_reserve_schema("mfrr_capacity", ["NO1"])
+    assert validate_dataframe(table, schema, raise_on_error=False) == []

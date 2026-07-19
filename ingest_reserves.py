@@ -80,10 +80,15 @@ def load_reserve_table(input_cfg: dict, raw_dir: Path, start: str, end: str) -> 
         index="_time", columns=["_zone", "_direction"], values="_volume", aggfunc="mean"
     )
 
+    # Emit all four columns for every configured zone, even when a direction
+    # never appears in the data (e.g. a zone that only procures upward
+    # capacity) — the schema requires the columns to exist; absent trades are
+    # all-NaN, not missing columns.
     out = pd.DataFrame(index=idx)
-    for zone, direction in combined[["_zone", "_direction"]].drop_duplicates().itertuples(index=False):
-        out[f"{zone}_{direction}_price"] = price[(zone, direction)].reindex(idx) if (zone, direction) in price.columns else float("nan")
-        out[f"{zone}_{direction}_volume"] = volume[(zone, direction)].reindex(idx) if (zone, direction) in volume.columns else float("nan")
+    for zone in input_cfg:
+        for direction in ("up", "down"):
+            out[f"{zone}_{direction}_price"] = price[(zone, direction)].reindex(idx) if (zone, direction) in price.columns else float("nan")
+            out[f"{zone}_{direction}_volume"] = volume[(zone, direction)].reindex(idx) if (zone, direction) in volume.columns else float("nan")
 
     out.index.name = "time"
     return out
