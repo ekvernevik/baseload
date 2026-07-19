@@ -9,6 +9,7 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config, sha256_file, write_json
 from baseload.io import read_prices
+from baseload.zones import zones_from_cfg
 
 
 def main() -> None:
@@ -22,7 +23,7 @@ def main() -> None:
     if not prices_path.exists():
         raise FileNotFoundError("Missing processed prices parquet. Run ingest_entsoe.py first.")
 
-    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
+    prices = read_prices(paths, zones=zones_from_cfg(cfg))  # validates against a schema built for the configured zones
     issues = []
     expected_idx = pd.date_range(prices.index.min(), prices.index.max(), freq="h", tz="UTC")
     missing_hours = expected_idx.difference(prices.index)

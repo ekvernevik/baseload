@@ -92,3 +92,20 @@ def test_load_transmission_table_handles_non_no_zones(tmp_path: Path, idx: pd.Da
 
     external_schema = build_external_balance_schema(["SE3", "SE4"])
     assert validate_dataframe(external_df, external_schema, raise_on_error=False) == []
+
+
+def test_io_roundtrip_with_non_default_zones(tmp_path: Path, idx: pd.DatetimeIndex):
+    """Artifacts written for a non-default zone set must read back through the
+    io wrappers when the same zones are passed — this is the read side of
+    "adding a zone is config-only". external_balance is the strictest case
+    (allow_extra_columns=False)."""
+    from baseload.io import read_external_balance, write_external_balance
+
+    zones = ["NO1", "NO2", "NO3", "NO4", "NO5", "SE3", "SE4"]
+    df = pd.DataFrame(0.0, index=idx, columns=zones)
+    df.index.name = "time"
+    paths = {"processed": tmp_path}
+
+    write_external_balance(df, paths, zones=zones)
+    out = read_external_balance(paths, zones=zones)
+    assert list(out.columns) == zones

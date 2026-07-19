@@ -23,7 +23,7 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config
 from baseload.io import read_prices, read_transmission, read_load, read_gen, read_external_balance, write_parquet
-from baseload.zones import DEFAULT_NTC_MW as NTC_MW, DEFAULT_ZONES as ZONES, ntc_from_cfg, zones_from_cfg
+from baseload.zones import DEFAULT_NTC_MW as NTC_MW, DEFAULT_ZONES as ZONES, ntc_from_cfg, pairs_from_cfg, zones_from_cfg
 
 CONGESTION_THRESHOLD = 0.95
 
@@ -249,26 +249,28 @@ def main() -> None:
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
     zones = zones_from_cfg(cfg)
+    pairs = pairs_from_cfg(cfg)
     ntc = ntc_from_cfg(cfg)
 
     print("Loading core inputs...")
-    prices = read_prices(paths)
-    transmission = read_transmission(paths)
+    prices = read_prices(paths, zones=zones)
+    transmission = read_transmission(paths, pairs=pairs)
 
     # Load supplemental inputs if they exist — validated through io wrappers.
     def _try_load(reader, name: str) -> pd.DataFrame | None:
         try:
-            df = reader(paths)
+            df = reader()
             print(f"  Found {name}.parquet")
             return df
         except FileNotFoundError:
             return None
 
-    load_df     = _try_load(read_load,             "load")
-    actgen_df   = _try_load(read_gen,              "actgen")
-    ext_bal_df  = _try_load(read_external_balance, "external_balance")
-    temperature_df = _try_load("temperature")
-    reservoir_df = _try_load("hydro_reservoir")
+    load_df     = _try_load(lambda: read_load(paths, zones=zones), "load")
+    actgen_df   = _try_load(lambda: read_gen(paths, zones=zones), "actgen")
+    ext_bal_df  = _try_load(lambda: read_external_balance(paths, zones=zones), "external_balance")
+    # temperature / hydro_reservoir have no io wrapper — read the parquet directly.
+    temperature_df = _try_load(lambda: pd.read_parquet(paths["processed"] / "temperature.parquet"), "temperature")
+    reservoir_df = _try_load(lambda: pd.read_parquet(paths["processed"] / "hydro_reservoir.parquet"), "hydro_reservoir")
 
     print(f"\nRunning flow-based congestion model for {len(prices)} hours...")
     shadow_prices = run_congestion_model(prices, transmission, ntc=ntc)
