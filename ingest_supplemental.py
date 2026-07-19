@@ -21,6 +21,7 @@ import pandas as pd
 import requests
 
 from baseload.pipeline_utils import ensure_dirs, load_config
+from baseload.zones import DEFAULT_ZONES, zones_from_cfg
 
 
 def _get_with_retry(url: str, params: dict, headers: dict | None = None, timeout: int = 30, max_retries: int = 3) -> requests.Response:
@@ -46,7 +47,9 @@ def _get_with_retry(url: str, params: dict, headers: dict | None = None, timeout
 # Hydro reservoir fill level via Nord Pool
 # ---------------------------------------------------------------------------
 
-def fetch_hydro_reservoir_from_csv(csv_path: Path, start: str, end: str) -> pd.DataFrame:
+def fetch_hydro_reservoir_from_csv(
+    csv_path: Path, start: str, end: str, zones: list[str] = DEFAULT_ZONES
+) -> pd.DataFrame:
     """Parse a Nord Pool hydro-reservoir CSV export.
 
     Download from:
@@ -54,9 +57,10 @@ def fetch_hydro_reservoir_from_csv(csv_path: Path, start: str, end: str) -> pd.D
     (click the download icon, choose CSV).
 
     Expected CSV format (Nord Pool export):
-      Date/Time | NO1 | NO2 | NO3 | NO4 | NO5   (values: % fill, 0–100)
+      Date/Time | <zone> | <zone> | ...   (values: % fill, 0–100)
 
-    Returns hourly DataFrame indexed by UTC timestamp, columns NO1..NO5.
+    Returns hourly DataFrame indexed by UTC timestamp, one column per zone in `zones`
+    that is present in the CSV.
     """
     if not csv_path.exists():
         raise FileNotFoundError(
@@ -73,8 +77,9 @@ def fetch_hydro_reservoir_from_csv(csv_path: Path, start: str, end: str) -> pd.D
     df["_time"] = pd.to_datetime(df[time_col], dayfirst=True, errors="coerce", utc=True)
     df = df.dropna(subset=["_time"]).set_index("_time").drop(columns=[time_col])
 
-    no_cols = [c for c in df.columns if c.strip().upper() in {"NO1", "NO2", "NO3", "NO4", "NO5"}]
-    df = df[no_cols].copy()
+    zone_set = {z.upper() for z in zones}
+    zone_cols = [c for c in df.columns if c.strip().upper() in zone_set]
+    df = df[zone_cols].copy()
     df.columns = [c.strip().upper() for c in df.columns]
     df = df.apply(pd.to_numeric, errors="coerce")
 
@@ -84,12 +89,14 @@ def fetch_hydro_reservoir_from_csv(csv_path: Path, start: str, end: str) -> pd.D
     return df
 
 
-def fetch_hydro_reservoir_api(start: str, end: str, api_key: str) -> pd.DataFrame:
+def fetch_hydro_reservoir_api(
+    start: str, end: str, api_key: str, zones: list[str] = DEFAULT_ZONES
+) -> pd.DataFrame:
     """Fetch hydro reservoir data from the Nord Pool Data Portal REST API.
 
     Requires a free account: https://www.nordpoolgroup.com/en/services/power-market-data-services/dataportalregistration/
 
-    Returns hourly DataFrame indexed by UTC timestamp, columns NO1..NO5, values in % fill.
+    Returns hourly DataFrame indexed by UTC timestamp, one column per zone in `zones`.
     """
     base_url = "https://data.nordpoolgroup.com/api/v1/power-system/reservoir"
 
@@ -99,7 +106,7 @@ def fetch_hydro_reservoir_api(start: str, end: str, api_key: str) -> pd.DataFram
     params = {
         "from": start_dt,
         "to": end_dt,
-        "areas": "NO1,NO2,NO3,NO4,NO5",
+        "areas": ",".join(zones),
         "resolution": "hourly",
     }
 
@@ -113,8 +120,9 @@ def fetch_hydro_reservoir_api(start: str, end: str, api_key: str) -> pd.DataFram
     df["_time"] = pd.to_datetime(df[time_col], utc=True, errors="coerce")
     df = df.dropna(subset=["_time"]).set_index("_time").drop(columns=[time_col])
 
-    no_cols = [c for c in df.columns if c.upper() in {"NO1", "NO2", "NO3", "NO4", "NO5"}]
-    df = df[no_cols].apply(pd.to_numeric, errors="coerce")
+    zone_set = {z.upper() for z in zones}
+    zone_cols = [c for c in df.columns if c.upper() in zone_set]
+    df = df[zone_cols].apply(pd.to_numeric, errors="coerce")
     df.columns = [c.upper() for c in df.columns]
 
     idx = pd.date_range(start=start, end=end, freq="h", tz="UTC")
@@ -227,6 +235,7 @@ def main() -> None:
     start = cfg["date_range"]["start"]
     end = cfg["date_range"]["end"]
     sup_cfg = cfg.get("supplemental", {})
+    zones = zones_from_cfg(cfg)
 
     # --- Hydro reservoir -------------------------------------------------------
     if not args.skip_reservoir:
@@ -238,7 +247,7 @@ def main() -> None:
             print(f"Loading hydro reservoir from CSV: {csv_path_str}")
             csv_path = Path(csv_path_str)
             try:
-                res_df = fetch_hydro_reservoir_from_csv(csv_path, start, end)
+                res_df = fetch_hydro_reservoir_from_csv(csv_path, start, end, zones=zones)
                 out_path = paths["processed"] / "hydro_reservoir.parquet"
                 res_df.to_parquet(out_path)
                 print(f"  Saved hydro reservoir -> {out_path}  shape={res_df.shape}")
@@ -247,7 +256,7 @@ def main() -> None:
         elif api_key:
             print("Fetching hydro reservoir from Nord Pool API...")
             try:
-                res_df = fetch_hydro_reservoir_api(start, end, api_key)
+                res_df = fetch_hydro_reservoir_api(start, end, api_key, zones=zones)
                 out_path = paths["processed"] / "hydro_reservoir.parquet"
                 res_df.to_parquet(out_path)
                 print(f"  Saved hydro reservoir -> {out_path}  shape={res_df.shape}")

@@ -23,13 +23,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from .schemas import SCHEMA_REGISTRY, DataFrameSchema, MultiIndexDataFrameSchema
+from .schemas import SCHEMA_BUILDERS, SCHEMA_REGISTRY, DataFrameSchema, MultiIndexDataFrameSchema
 from .validators import (
     SchemaError,
     validate_dataframe,
     validate_multiindex_dataframe,
-    validate_gen,
-    validate_external_balance,
 )
 
 
@@ -42,15 +40,21 @@ def read_parquet(
     schema_name: str | None = None,
     *,
     validate: bool = True,
+    zones: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Read a parquet file and optionally validate it against a named schema."""
+    """Read a parquet file and optionally validate it against a named schema.
+
+    ``zones`` (interpreted as pairs for the "transmission" schema) selects a
+    schema built for that exact zone/pair set via ``SCHEMA_BUILDERS`` instead
+    of the NO1-NO5 default in ``SCHEMA_REGISTRY``.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Parquet file not found: {path}")
 
     df = pd.read_parquet(path)
 
     if validate and schema_name is not None:
-        schema = _get_schema(schema_name, path)
+        schema = _get_schema(schema_name, path, zones=zones)
         _validate(df, schema)
 
     return df
@@ -63,14 +67,17 @@ def write_parquet(
     *,
     validate: bool = True,
     also_csv: bool = False,
+    zones: list[str] | None = None,
 ) -> None:
     """Validate *df* then write it to *path* as parquet.
 
     Validation runs before any bytes are written so a bad DataFrame never
-    produces a corrupt artifact on disk.
+    produces a corrupt artifact on disk. ``zones`` (interpreted as pairs for
+    the "transmission" schema) selects a schema built for that exact
+    zone/pair set via ``SCHEMA_BUILDERS`` instead of the NO1-NO5 default.
     """
     if validate and schema_name is not None:
-        schema = _get_schema(schema_name, path)
+        schema = _get_schema(schema_name, path, zones=zones)
         _validate(df, schema)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,57 +91,58 @@ def write_parquet(
 # Intermediate artifact wrappers  (data/processed/)
 # ---------------------------------------------------------------------------
 
-def read_prices(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
-    return read_parquet(paths["processed"] / "prices.parquet", schema_name="prices", validate=validate)
+def read_prices(paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> pd.DataFrame:
+    return read_parquet(paths["processed"] / "prices.parquet", schema_name="prices", validate=validate, zones=zones)
 
 
-def write_prices(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True) -> None:
-    write_parquet(df, paths["processed"] / "prices.parquet", schema_name="prices", validate=validate)
+def write_prices(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> None:
+    write_parquet(df, paths["processed"] / "prices.parquet", schema_name="prices", validate=validate, zones=zones)
 
 
-def read_load(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
-    return read_parquet(paths["processed"] / "load.parquet", schema_name="load", validate=validate)
+def read_load(paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> pd.DataFrame:
+    return read_parquet(paths["processed"] / "load.parquet", schema_name="load", validate=validate, zones=zones)
 
 
-def write_load(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True) -> None:
-    write_parquet(df, paths["processed"] / "load.parquet", schema_name="load", validate=validate)
+def write_load(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> None:
+    write_parquet(df, paths["processed"] / "load.parquet", schema_name="load", validate=validate, zones=zones)
 
 
-def read_gen(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
+def read_gen(paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> pd.DataFrame:
     """Load ``data/processed/actgen.parquet``.
 
     Returns a MultiIndex-column DataFrame (level 0 = zone, level 1 = type).
     """
-    return read_parquet(paths["processed"] / "actgen.parquet", schema_name="actgen", validate=validate)
+    return read_parquet(paths["processed"] / "actgen.parquet", schema_name="actgen", validate=validate, zones=zones)
 
 
-def write_gen(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True) -> None:
+def write_gen(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> None:
     """Persist a MultiIndex generation DataFrame to ``data/processed/actgen.parquet``."""
     if validate:
-        validate_gen(df, raise_on_error=True)
+        schema = _get_schema("actgen", paths["processed"] / "actgen.parquet", zones=zones)
+        validate_multiindex_dataframe(df, schema, raise_on_error=True)
     path = paths["processed"] / "actgen.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, index=True)
 
 
-def read_transmission(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
+def read_transmission(paths: dict[str, Path], *, validate: bool = True, pairs: list[str] | None = None) -> pd.DataFrame:
     """Load ``data/processed/transmission.parquet`` (internal net flows)."""
-    return read_parquet(paths["processed"] / "transmission.parquet", schema_name="transmission", validate=validate)
+    return read_parquet(paths["processed"] / "transmission.parquet", schema_name="transmission", validate=validate, zones=pairs)
 
 
-def write_transmission(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True) -> None:
+def write_transmission(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, pairs: list[str] | None = None) -> None:
     """Persist the internal transmission DataFrame to ``data/processed/transmission.parquet``."""
-    write_parquet(df, paths["processed"] / "transmission.parquet", schema_name="transmission", validate=validate)
+    write_parquet(df, paths["processed"] / "transmission.parquet", schema_name="transmission", validate=validate, zones=pairs)
 
 
-def read_external_balance(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
+def read_external_balance(paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> pd.DataFrame:
     """Load ``data/processed/external_balance.parquet`` (net import per zone)."""
-    return read_parquet(paths["processed"] / "external_balance.parquet", schema_name="external_balance", validate=validate)
+    return read_parquet(paths["processed"] / "external_balance.parquet", schema_name="external_balance", validate=validate, zones=zones)
 
 
-def write_external_balance(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True) -> None:
+def write_external_balance(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, zones: list[str] | None = None) -> None:
     """Persist the external balance DataFrame to ``data/processed/external_balance.parquet``."""
-    write_parquet(df, paths["processed"] / "external_balance.parquet", schema_name="external_balance", validate=validate)
+    write_parquet(df, paths["processed"] / "external_balance.parquet", schema_name="external_balance", validate=validate, zones=zones)
 
 
 # ---------------------------------------------------------------------------
@@ -161,12 +169,19 @@ def write_valuation_rh(df: pd.DataFrame, paths: dict[str, Path], *, validate: bo
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _get_schema(schema_name: str, path: Path) -> DataFrameSchema | MultiIndexDataFrameSchema:
+def _get_schema(
+    schema_name: str,
+    path: Path,
+    *,
+    zones: list[str] | None = None,
+) -> DataFrameSchema | MultiIndexDataFrameSchema:
     if schema_name not in SCHEMA_REGISTRY:
         raise KeyError(
             f"Unknown schema '{schema_name}' for path {path}. "
             f"Available: {sorted(SCHEMA_REGISTRY)}."
         )
+    if zones is not None:
+        return SCHEMA_BUILDERS[schema_name](zones)
     return SCHEMA_REGISTRY[schema_name]
 
 

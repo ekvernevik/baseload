@@ -40,6 +40,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .zones import DEFAULT_PAIRS, DEFAULT_ZONES
+
 
 # ---------------------------------------------------------------------------
 # Column descriptor  (used in flat DataFrameSchema)
@@ -103,109 +105,109 @@ class MultiIndexDataFrameSchema:
 
 #: Day-ahead spot prices, hourly UTC.
 #: Observed 2026 range: NO4 reached -27 EUR/MWh; upper bound covers crisis spikes.
-PRICES_SCHEMA = DataFrameSchema(
-    name="prices",
-    index_name="time",
-    index_dtype="datetime64[ns, UTC]",
-    columns=[
-        ColumnSchema("NO1", dtype="float64", nullable=True, min_value=-500.0, max_value=3000.0, unit="EUR/MWh"),
-        ColumnSchema("NO2", dtype="float64", nullable=True, min_value=-500.0, max_value=3000.0, unit="EUR/MWh"),
-        ColumnSchema("NO3", dtype="float64", nullable=True, min_value=-500.0, max_value=3000.0, unit="EUR/MWh"),
-        ColumnSchema("NO4", dtype="float64", nullable=True, min_value=-500.0, max_value=3000.0, unit="EUR/MWh"),
-        ColumnSchema("NO5", dtype="float64", nullable=True, min_value=-500.0, max_value=3000.0, unit="EUR/MWh"),
-    ],
-    allow_extra_columns=True,
-    min_rows=168,
-    check_hourly_continuity=True,
-)
+def build_prices_schema(zones: list[str] = DEFAULT_ZONES) -> DataFrameSchema:
+    return DataFrameSchema(
+        name="prices",
+        index_name="time",
+        index_dtype="datetime64[ns, UTC]",
+        columns=[
+            ColumnSchema(z, dtype="float64", nullable=True, min_value=-500.0, max_value=3000.0, unit="EUR/MWh")
+            for z in zones
+        ],
+        allow_extra_columns=True,
+        min_rows=168,
+        check_hourly_continuity=True,
+    )
+
 
 #: Actual total load, hourly UTC.
 #: Observed 2025 maxima: NO1 7169, NO2 6052, NO3 4667, NO4 3370, NO5 3147 MW.
-LOAD_SCHEMA = DataFrameSchema(
-    name="load",
-    index_name="time",
-    index_dtype="datetime64[ns, UTC]",
-    columns=[
-        ColumnSchema("NO1", dtype="float64", nullable=True, min_value=0.0, max_value=15000.0, unit="MW"),
-        ColumnSchema("NO2", dtype="float64", nullable=True, min_value=0.0, max_value=15000.0, unit="MW"),
-        ColumnSchema("NO3", dtype="float64", nullable=True, min_value=0.0, max_value=15000.0, unit="MW"),
-        ColumnSchema("NO4", dtype="float64", nullable=True, min_value=0.0, max_value=15000.0, unit="MW"),
-        ColumnSchema("NO5", dtype="float64", nullable=True, min_value=0.0, max_value=15000.0, unit="MW"),
-    ],
-    allow_extra_columns=True,
-    min_rows=168,
-    check_hourly_continuity=True,
-)
+def build_load_schema(zones: list[str] = DEFAULT_ZONES) -> DataFrameSchema:
+    return DataFrameSchema(
+        name="load",
+        index_name="time",
+        index_dtype="datetime64[ns, UTC]",
+        columns=[
+            ColumnSchema(z, dtype="float64", nullable=True, min_value=0.0, max_value=15000.0, unit="MW")
+            for z in zones
+        ],
+        allow_extra_columns=True,
+        min_rows=168,
+        check_hourly_continuity=True,
+    )
+
 
 #: Actual generation per production type, hourly UTC.
-#: MultiIndex columns: level 0 = zone (NO1-NO5), level 1 = ENTSO-E type name.
+#: MultiIndex columns: level 0 = zone, level 1 = ENTSO-E type name.
 #: Level names = ["_zone", "_type"] as set by pivot_table in load_actgen_table.
 #: Not every (zone, type) combination exists — inactive pairs are simply absent.
 #: Generation is always non-negative; upper bound 20 000 MW covers total NO hydro capacity.
-GEN_SCHEMA = MultiIndexDataFrameSchema(
-    name="actgen",
-    index_name=None,            # pivot_table sets "_time"; reindex(idx) clears it
-    index_dtype="datetime64[ns, UTC]",
-    min_rows=168,
-    check_hourly_continuity=True,
-    expected_level0=["NO1", "NO2", "NO3", "NO4", "NO5"],
-    expected_level1=[
-        "Hydro Water Reservoir",
-        "Hydro Run-of-river and pondage",
-        "Hydro Pumped Storage",
-        "Wind Onshore",
-        "Wind Offshore",
-        "Solar",
-        "Fossil Gas",
-        "Waste",
-        "Other renewable",
-    ],
-    level_names=["_zone", "_type"],
-    min_value=0.0,
-    max_value=20000.0,
-    unit="MW",
-)
+def build_gen_schema(zones: list[str] = DEFAULT_ZONES) -> MultiIndexDataFrameSchema:
+    return MultiIndexDataFrameSchema(
+        name="actgen",
+        index_name=None,            # pivot_table sets "_time"; reindex(idx) clears it
+        index_dtype="datetime64[ns, UTC]",
+        min_rows=168,
+        check_hourly_continuity=True,
+        expected_level0=list(zones),
+        expected_level1=[
+            "Hydro Water Reservoir",
+            "Hydro Run-of-river and pondage",
+            "Hydro Pumped Storage",
+            "Wind Onshore",
+            "Wind Offshore",
+            "Solar",
+            "Fossil Gas",
+            "Waste",
+            "Other renewable",
+        ],
+        level_names=["_zone", "_type"],
+        min_value=0.0,
+        max_value=20000.0,
+        unit="MW",
+    )
 
-#: Internal NO-NO net physical flows, hourly UTC.
-#: Columns: "NOx-NOy" where x < y (lower zone number first).
-#: Values: net MW toward higher-numbered zone; negative = reverse direction.
-#: 6 internal pairs observed in 2025 data.
-TRANSMISSION_INTERNAL_SCHEMA = DataFrameSchema(
-    name="transmission",
-    index_name="time",
-    index_dtype="datetime64[ns, UTC]",
-    columns=[
-        ColumnSchema("NO1-NO2", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO1-NO3", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO1-NO5", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO2-NO5", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO3-NO4", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
-        ColumnSchema("NO3-NO5", dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW"),
-    ],
-    allow_extra_columns=True,
-    min_rows=168,
-    check_hourly_continuity=True,
-)
 
-#: Net external import balance per NO zone, hourly UTC.
-#: Columns: zone names NO1-NO5.
-#: Values: net MW import from outside Norway; positive = importing, negative = exporting.
-#: Includes all non-NO neighbours: SE, DK, DE-LU, NL, GB, FI.
-EXTERNAL_BALANCE_SCHEMA = DataFrameSchema(
-    name="external_balance",
-    index_name="time",
-    index_dtype="datetime64[ns, UTC]",
-    columns=[
-        ColumnSchema("NO1", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
-        ColumnSchema("NO2", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
-        ColumnSchema("NO3", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
-        ColumnSchema("NO4", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
-        ColumnSchema("NO5", dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW"),
-    ],
-    allow_extra_columns=False,
-    min_rows=168,
-    check_hourly_continuity=True,
-)
+#: Internal net physical flows between zone pairs, hourly UTC.
+#: Columns: "ZoneA-ZoneB" where ZoneA < ZoneB (lexicographic).
+#: Values: net MW toward the higher-sorted zone; negative = reverse direction.
+def build_transmission_schema(pairs: list[str] = DEFAULT_PAIRS) -> DataFrameSchema:
+    return DataFrameSchema(
+        name="transmission",
+        index_name="time",
+        index_dtype="datetime64[ns, UTC]",
+        columns=[
+            ColumnSchema(p, dtype="float64", nullable=True, min_value=-5000.0, max_value=5000.0, unit="MW")
+            for p in pairs
+        ],
+        allow_extra_columns=True,
+        min_rows=168,
+        check_hourly_continuity=True,
+    )
+
+
+#: Net external import balance per zone, hourly UTC.
+#: Values: net MW import from outside the configured zone set; positive = importing, negative = exporting.
+def build_external_balance_schema(zones: list[str] = DEFAULT_ZONES) -> DataFrameSchema:
+    return DataFrameSchema(
+        name="external_balance",
+        index_name="time",
+        index_dtype="datetime64[ns, UTC]",
+        columns=[
+            ColumnSchema(z, dtype="float64", nullable=True, min_value=-10000.0, max_value=10000.0, unit="MW")
+            for z in zones
+        ],
+        allow_extra_columns=False,
+        min_rows=168,
+        check_hourly_continuity=True,
+    )
+
+
+PRICES_SCHEMA = build_prices_schema(DEFAULT_ZONES)
+LOAD_SCHEMA = build_load_schema(DEFAULT_ZONES)
+GEN_SCHEMA = build_gen_schema(DEFAULT_ZONES)
+TRANSMISSION_INTERNAL_SCHEMA = build_transmission_schema(DEFAULT_PAIRS)
+EXTERNAL_BALANCE_SCHEMA = build_external_balance_schema(DEFAULT_ZONES)
 
 
 # ---------------------------------------------------------------------------
@@ -251,4 +253,16 @@ SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     # final
     "valuation_pf":      VALUATION_PF_SCHEMA,
     "valuation_rh":      VALUATION_RH_SCHEMA,
+}
+
+#: Schema builders keyed by artifact name, for callers that need a schema
+#: parameterized by the actual configured zones/pairs rather than the
+#: NO1-NO5 default baked into SCHEMA_REGISTRY. Only artifacts with a
+#: zone- or pair-shaped column set have a builder.
+SCHEMA_BUILDERS = {
+    "prices":            build_prices_schema,
+    "load":              build_load_schema,
+    "actgen":            build_gen_schema,
+    "transmission":      build_transmission_schema,
+    "external_balance":  build_external_balance_schema,
 }

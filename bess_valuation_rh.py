@@ -10,6 +10,7 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config
 from baseload.io import read_prices, read_valuation_pf, write_valuation_rh
+from baseload.zones import zones_from_cfg
 
 try:
     import pulp
@@ -92,7 +93,7 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
-    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
+    prices = read_prices(paths, zones=zones_from_cfg(cfg))  # validates against a schema built for the configured zones
     pf = read_valuation_pf(paths).set_index("zone")  # validates against VALUATION_PF_SCHEMA on load
 
     bcfg = cfg.get("bess", {})

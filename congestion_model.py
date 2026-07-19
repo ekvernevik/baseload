@@ -23,22 +23,7 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, load_config
 from baseload.io import read_prices, read_transmission, read_load, read_gen, read_external_balance, write_parquet
-
-# ---------------------------------------------------------------------------
-# Static grid topology: NTC capacity limits per internal NO zone pair (MW).
-# Source: ENTSO-E Winter Outlook / Statnett published transfer capacities.
-# These are symmetric — same limit in both directions.
-# ---------------------------------------------------------------------------
-NTC_MW = {
-    "NO1-NO2": 3500,
-    "NO1-NO3": 500,
-    "NO1-NO5": 1000,
-    "NO2-NO5": 600,
-    "NO3-NO4": 700,
-    "NO3-NO5": 1000,
-}
-
-ZONES = ["NO1", "NO2", "NO3", "NO4", "NO5"]
+from baseload.zones import DEFAULT_NTC_MW as NTC_MW, DEFAULT_ZONES as ZONES, ntc_from_cfg, pairs_from_cfg, zones_from_cfg
 
 CONGESTION_THRESHOLD = 0.95
 
@@ -49,6 +34,7 @@ TEMP_ROLLING_DAYS = 14
 def run_congestion_model(
     prices: pd.DataFrame,
     transmission: pd.DataFrame,
+    ntc: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Compute shadow prices from observed flows and NTC limits.
 
@@ -57,10 +43,12 @@ def run_congestion_model(
 
     Returns a DataFrame indexed by timestamp with one column per zone pair.
     """
+    if ntc is None:
+        ntc = NTC_MW
     prices, transmission = prices.align(transmission, join="inner", axis=0)
-    result = pd.DataFrame(index=prices.index, columns=list(NTC_MW.keys()), dtype=float)
+    result = pd.DataFrame(index=prices.index, columns=list(ntc.keys()), dtype=float)
 
-    for pair, ntc in NTC_MW.items():
+    for pair, ntc_mw in ntc.items():
         parts = pair.split("-")
         if len(parts) != 2:
             raise ValueError(f"Invalid NTC pair format: '{pair}'. Expected 'ZONE_A-ZONE_B'.")
@@ -81,7 +69,7 @@ def run_congestion_model(
             result[pair] = 0.0
             continue
 
-        utilization = flow.abs() / ntc
+        utilization = flow.abs() / ntc_mw
         congested = utilization >= CONGESTION_THRESHOLD
         spread = prices[zone_a] - prices[zone_b]
         result[pair] = spread.where(congested, other=0.0)
@@ -93,12 +81,15 @@ def compute_net_positions(
     load: pd.DataFrame,
     actgen: pd.DataFrame,
     external_balance: pd.DataFrame,
+    zones: list[str] | None = None,
 ) -> pd.DataFrame:
     """Return net position per zone (MW): generation + imports - load.
 
     Positive = zone is long (surplus); negative = zone is short (deficit).
     actgen has MultiIndex columns (zone, production_type); we sum across types.
     """
+    if zones is None:
+        zones = ZONES
     # Sum all generation types per zone.
     if isinstance(actgen.columns, pd.MultiIndex):
         gen_by_zone = actgen.T.groupby(level=0).sum().T  # axis=1 groupby deprecated in pandas 2.0
@@ -106,9 +97,9 @@ def compute_net_positions(
         gen_by_zone = actgen.copy()
 
     common_idx = load.index.intersection(gen_by_zone.index).intersection(external_balance.index)
-    net = pd.DataFrame(index=common_idx, columns=ZONES, dtype=float)
+    net = pd.DataFrame(index=common_idx, columns=zones, dtype=float)
 
-    for zone in ZONES:
+    for zone in zones:
         g = gen_by_zone[zone] if zone in gen_by_zone.columns else pd.Series(0.0, index=common_idx)
         l = load[zone] if zone in load.columns else pd.Series(0.0, index=common_idx)
         e = external_balance[zone] if zone in external_balance.columns else pd.Series(0.0, index=common_idx)
@@ -126,6 +117,7 @@ def build_attribution(
     reservoir: pd.DataFrame | None = None,
     cold_snap_threshold_c: float = -3.0,
     hydro_surplus_threshold_pct: float = 70.0,
+    ntc: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Build a long-format causal attribution table for congested hours.
 
@@ -134,6 +126,8 @@ def build_attribution(
 
     Fully vectorized — no per-row Python loops.
     """
+    if ntc is None:
+        ntc = NTC_MW
     # Precompute temperature deviation once (trailing 14-day baseline per zone).
     temp_deviation: pd.DataFrame | None = None
     if temperature is not None:
@@ -142,14 +136,14 @@ def build_attribution(
 
     pair_frames: list[pd.DataFrame] = []
 
-    for pair, ntc in NTC_MW.items():
+    for pair, ntc_mw in ntc.items():
         zone_a, zone_b = pair.split("-")
 
         if pair not in transmission.columns:
             continue
 
         flow = transmission[pair].reindex(shadow_prices.index)
-        utilization = (flow.abs() / ntc).round(3)
+        utilization = (flow.abs() / ntc_mw).round(3)
         shadow = shadow_prices[pair]
         congested_mask = shadow.abs() > 0.0
 
@@ -254,28 +248,32 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
+    zones = zones_from_cfg(cfg)
+    pairs = pairs_from_cfg(cfg)
+    ntc = ntc_from_cfg(cfg)
 
     print("Loading core inputs...")
-    prices = read_prices(paths)
-    transmission = read_transmission(paths)
+    prices = read_prices(paths, zones=zones)
+    transmission = read_transmission(paths, pairs=pairs)
 
     # Load supplemental inputs if they exist — validated through io wrappers.
     def _try_load(reader, name: str) -> pd.DataFrame | None:
         try:
-            df = reader(paths)
+            df = reader()
             print(f"  Found {name}.parquet")
             return df
         except FileNotFoundError:
             return None
 
-    load_df     = _try_load(read_load,             "load")
-    actgen_df   = _try_load(read_gen,              "actgen")
-    ext_bal_df  = _try_load(read_external_balance, "external_balance")
-    temperature_df = _try_load("temperature")
-    reservoir_df = _try_load("hydro_reservoir")
+    load_df     = _try_load(lambda: read_load(paths, zones=zones), "load")
+    actgen_df   = _try_load(lambda: read_gen(paths, zones=zones), "actgen")
+    ext_bal_df  = _try_load(lambda: read_external_balance(paths, zones=zones), "external_balance")
+    # temperature / hydro_reservoir have no io wrapper — read the parquet directly.
+    temperature_df = _try_load(lambda: pd.read_parquet(paths["processed"] / "temperature.parquet"), "temperature")
+    reservoir_df = _try_load(lambda: pd.read_parquet(paths["processed"] / "hydro_reservoir.parquet"), "hydro_reservoir")
 
     print(f"\nRunning flow-based congestion model for {len(prices)} hours...")
-    shadow_prices = run_congestion_model(prices, transmission)
+    shadow_prices = run_congestion_model(prices, transmission, ntc=ntc)
 
     out_path = paths["tables"] / "congestion_shadow_prices.parquet"
     write_parquet(shadow_prices, out_path)
@@ -301,7 +299,7 @@ def main() -> None:
                 print(f"  Columns (first 5): {list(actgen_df.columns[:5])}")
                 print("  Net positions will use flat columns — zone grouping may be inaccurate.")
 
-        net_pos = compute_net_positions(load_df, actgen_df, ext_bal_df)
+        net_pos = compute_net_positions(load_df, actgen_df, ext_bal_df, zones=zones)
 
         sup_cfg = cfg.get("supplemental", {})
         attribution = build_attribution(
@@ -312,6 +310,7 @@ def main() -> None:
             reservoir=reservoir_df,
             cold_snap_threshold_c=float(sup_cfg.get("cold_snap_threshold_c", -3.0)),
             hydro_surplus_threshold_pct=float(sup_cfg.get("hydro_surplus_threshold_pct", 70.0)),
+            ntc=ntc,
         )
 
         if not attribution.empty:
