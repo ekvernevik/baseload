@@ -27,7 +27,7 @@ _pd.options.future.infer_string = False
 
 import pypsa  # noqa: E402 (must come after pandas option set)
 
-from baseload.pipeline_utils import ensure_dirs, load_config
+from baseload.pipeline_utils import ensure_dirs, index_dt_hours, load_config
 from baseload.zones import DEFAULT_NTC_MW as NTC_MW, DEFAULT_ZONES as ZONES, ntc_from_cfg, zones_from_cfg
 
 # Slack generator cost — high enough to dominate; in €/MWh.
@@ -101,6 +101,12 @@ def build_network(
 
     n = pypsa.Network()
     n.set_snapshots(snapshots)
+
+    # Sub-hourly data: weight each snapshot by its length in hours so energy
+    # balances and objective terms stay in MWh/EUR at any resolution.
+    dt = index_dt_hours(common_idx)
+    if abs(dt - 1.0) > 1e-9:
+        n.snapshot_weightings.loc[:, :] = dt
 
     # --- Buses (one per bidding zone) ---
     for zone in zones:
