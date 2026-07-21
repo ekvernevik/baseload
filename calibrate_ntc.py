@@ -24,11 +24,11 @@ For each configured interconnector pair with both observed flows
 Outputs
 -------
 artifacts/tables/ntc_calibration.parquet   per-pair fit + verification report
-data/metadata/ntc_calibrated.yaml          drop-in `network.interconnectors`
-                                           block with provenance — paste into
-                                           the pipeline config (or point at it)
-                                           to make norway_network.py use the
-                                           calibrated limits.
+data/metadata/ntc_calibrated.yaml          drop-in `ntc:` block (baseload.zones
+                                           convention) + `ntc_provenance:` sidecar —
+                                           paste `ntc:` into the pipeline config to
+                                           make norway_network.py use the calibrated
+                                           limits.
 
 A warning is raised when the data window is shorter than 2 years; the fit is
 still produced (useful in tests/exploration) but flagged as provisional.
@@ -44,7 +44,8 @@ import pandas as pd
 import yaml
 
 from baseload.io import read_prices, read_transmission, write_parquet
-from baseload.pipeline_utils import init_pipeline, load_config
+from baseload.pipeline_utils import ensure_dirs, load_config, resolution_freq
+from baseload.zones import pairs_from_cfg, zones_from_cfg
 
 MIN_YEARS_RECOMMENDED = 2.0
 
@@ -112,23 +113,27 @@ def calibrate_ntc(
 
 
 def emit_config_block(report: pd.DataFrame, provenance: dict, out_path: Path) -> None:
-    """Write a drop-in `network.interconnectors` YAML block with provenance."""
+    """Write a drop-in ``ntc:`` YAML block (baseload.zones convention) plus a
+    machine-readable ``ntc_provenance:`` sidecar.
+
+    ``ntc:`` is a flat ``{pair: mw}`` mapping so ``zones.ntc_from_cfg`` consumes
+    it directly; ``ntc_provenance:`` records how each value was derived. Paste
+    ``ntc:`` over the block in the pipeline config to use the calibrated limits.
+    """
     block = {
-        "network": {
-            "interconnectors": {
-                row["pair"]: {
-                    "ntc_mw": round(float(row["ntc_mw"]), 1),
-                    "calibrated": True,
-                    "source": (
-                        f"calibrate_ntc.py {provenance['generated']} | "
-                        f"window {provenance['data_start']}..{provenance['data_end']} | "
-                        f"sep_threshold={provenance['sep_threshold']} EUR/MWh | "
-                        f"binding {row['modeled_binding_freq']:.1%} vs observed {row['observed_sep_freq']:.1%}"
-                    ),
-                }
-                for _, row in report.iterrows()
+        "ntc": {row["pair"]: round(float(row["ntc_mw"]), 1) for _, row in report.iterrows()},
+        "ntc_provenance": {
+            row["pair"]: {
+                "calibrated": True,
+                "source": (
+                    f"calibrate_ntc.py {provenance['generated']} | "
+                    f"window {provenance['data_start']}..{provenance['data_end']} | "
+                    f"sep_threshold={provenance['sep_threshold']} EUR/MWh | "
+                    f"binding {row['modeled_binding_freq']:.1%} vs observed {row['observed_sep_freq']:.1%}"
+                ),
             }
-        }
+            for _, row in report.iterrows()
+        },
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as fh:
@@ -141,16 +146,18 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    paths = init_pipeline(cfg)
-    prices = read_prices(paths)
-    flows = read_transmission(paths)
+    paths = ensure_dirs(cfg)
+    zones = zones_from_cfg(cfg)
+    pairs_cfg = pairs_from_cfg(cfg)
+    freq = resolution_freq(cfg)
+    prices = read_prices(paths, zones=zones, freq=freq)
+    flows = read_transmission(paths, pairs=pairs_cfg, freq=freq)
 
     cal_cfg = cfg.get("calibration", {}) or {}
     sep_threshold = float(cal_cfg.get("sep_threshold_eur", 1.0))
     tolerance_pp = float(cal_cfg.get("tolerance_pp", 2.0))
 
-    inter = (cfg.get("network") or {}).get("interconnectors") or {}
-    pairs = list(inter) if inter else list(flows.columns)
+    pairs = [p for p in pairs_cfg if p in flows.columns] or list(flows.columns)
 
     years = (prices.index.max() - prices.index.min()).days / 365.25
     if years < MIN_YEARS_RECOMMENDED:

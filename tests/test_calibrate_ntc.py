@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from calibrate_ntc import calibrate_ntc, calibrate_pair, emit_config_block
-from norway_network import network_params_from_config
+from baseload.zones import ntc_from_cfg
 
 
 def _congested_link(true_ntc: float = 800.0, periods: int = 8760, seed: int = 11):
@@ -93,8 +93,8 @@ class TestCalibrateTable:
         emit_config_block(report, provenance, out)
 
         cfg = yaml.safe_load(out.read_text())
-        zones, ntc = network_params_from_config(cfg)
+        # The emitted `ntc:` block is consumed directly by baseload.zones.
+        ntc = ntc_from_cfg(cfg)
         assert ntc["NO1-NO2"] == pytest.approx(800.0, rel=0.05)
-        spec = cfg["network"]["interconnectors"]["NO1-NO2"]
-        assert spec["calibrated"] is True
-        assert "window 2024-01-01..2024-12-31" in spec["source"]
+        assert cfg["ntc_provenance"]["NO1-NO2"]["calibrated"] is True
+        assert "window 2024-01-01..2024-12-31" in cfg["ntc_provenance"]["NO1-NO2"]["source"]
