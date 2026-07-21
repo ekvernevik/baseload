@@ -34,7 +34,8 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
 
 from baseload.io import read_prices, write_parquet
-from baseload.pipeline_utils import index_dt_hours, init_pipeline, load_config
+from baseload.pipeline_utils import ensure_dirs, index_dt_hours, load_config, resolution_freq
+from baseload.zones import zones_from_cfg
 
 DEFAULT_QUANTILES = (0.1, 0.5, 0.9)
 
@@ -261,8 +262,10 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    paths = init_pipeline(cfg)
-    prices = read_prices(paths)
+    paths = ensure_dirs(cfg)
+    zones = zones_from_cfg(cfg)
+    freq = resolution_freq(cfg)
+    prices = read_prices(paths, zones=zones, freq=freq)
 
     fcfg = cfg.get("forecast", {}) or {}
     quantiles = tuple(float(q) for q in fcfg.get("quantiles", DEFAULT_QUANTILES))
@@ -291,8 +294,8 @@ def main() -> None:
     scen_df = pd.DataFrame(all_scens)
     scen_df.columns = pd.MultiIndex.from_tuples(scen_df.columns, names=["_zone", "_scenario"])
 
-    write_parquet(forecast_df, paths["processed"] / "price_forecast.parquet", schema_name="price_forecast")
-    write_parquet(scen_df, paths["processed"] / "price_scenarios.parquet", schema_name="price_scenarios")
+    write_parquet(forecast_df, paths["processed"] / "price_forecast.parquet", schema_name="price_forecast", freq=freq)
+    write_parquet(scen_df, paths["processed"] / "price_scenarios.parquet", schema_name="price_scenarios", freq=freq)
 
     report = pd.DataFrame(rows)
     write_parquet(report, paths["tables"] / "forecast_backtest.parquet", schema_name="forecast_backtest", also_csv=True)
