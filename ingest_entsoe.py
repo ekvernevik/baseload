@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from baseload.pipeline_utils import align_hourly, ensure_dirs, load_config, parse_csv_flexible, standardize_series
+from baseload.pipeline_utils import align_index, ensure_dirs, load_config, parse_csv_flexible, resolution_freq, standardize_series
 from baseload.zones import pair_name, zones_from_cfg
 
 from baseload.io import write_prices, write_parquet, write_gen, write_transmission, write_external_balance
@@ -27,20 +27,20 @@ _RELEVANT_GEN_TYPES = {
 }
 
 
-def load_zone_table(input_cfg: dict, raw_dir: Path, start: str, end: str, label: str):
-    # Read multiple per-zone CSV exports and normalize to a uniform hourly index.
-    # `input_cfg` maps zone names to relative CSV paths under raw_dir.
+def load_zone_table(input_cfg: dict, raw_dir: Path, start: str, end: str, label: str, freq: str = "h"):
+    # Read multiple per-zone CSV exports and normalize to a uniform index at the
+    # configured target resolution. `input_cfg` maps zone names to CSV paths.
     zone_map = {}
     for zone, rel_path in input_cfg.items():
         raw_path = raw_dir / rel_path
         df = parse_csv_flexible(raw_path)
-        zone_map[zone] = standardize_series(df, zone=zone, value_name=label)
+        zone_map[zone] = standardize_series(df, zone=zone, value_name=label, freq=freq)
 
-    # Align all series to the desired global start/end window and hourly frequency.
-    return align_hourly(zone_map, start=start, end=end)
+    # Align all series to the global start/end window at the target frequency.
+    return align_index(zone_map, start=start, end=end, freq=freq)
 
 
-def load_load_table(input_cfg: dict, load_dir: Path, start: str, end: str):
+def load_load_table(input_cfg: dict, load_dir: Path, start: str, end: str, freq: str = "h"):
     # Same structure as prices but CSVs contain both actual and forecast columns.
     # Drop the forecast column so standardize_series picks actual load unambiguously.
     zone_map = {}
@@ -48,8 +48,8 @@ def load_load_table(input_cfg: dict, load_dir: Path, start: str, end: str):
         df = parse_csv_flexible(load_dir / rel_path)
         forecast_cols = [c for c in df.columns if "forecast" in c.lower()]
         df = df.drop(columns=forecast_cols)
-        zone_map[zone] = standardize_series(df, zone=zone, value_name="load")
-    return align_hourly(zone_map, start=start, end=end)
+        zone_map[zone] = standardize_series(df, zone=zone, value_name="load", freq=freq)
+    return align_index(zone_map, start=start, end=end, freq=freq)
 
 
 def _parse_mtu(series: pd.Series) -> pd.DatetimeIndex:
@@ -61,10 +61,10 @@ def _parse_mtu(series: pd.Series) -> pd.DatetimeIndex:
     ).dt.tz_localize("UTC")
 
 
-def load_actgen_table(input_cfg: dict, actgen_dir: Path, start: str, end: str):
-    # Long-format CSVs: one row per hour per production type per zone.
+def load_actgen_table(input_cfg: dict, actgen_dir: Path, start: str, end: str, freq: str = "h"):
+    # Long-format CSVs: one row per MTU per production type per zone.
     # Output: DataFrame with MultiIndex columns (zone, production_type).
-    idx = pd.date_range(start=start, end=end, freq="h", tz="UTC")
+    idx = pd.date_range(start=start, end=end, freq=freq, tz="UTC")
     all_frames = []
 
     for zone, rel_path in input_cfg.items():
@@ -113,7 +113,7 @@ def _make_zone_extractor(zones: set[str]):
     return _extract_zone
 
 
-def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str, end: str, zones: set[str]):
+def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str, end: str, zones: set[str], freq: str = "h"):
     # Long-format CSVs: one row per direction per interconnect per hour.
     # Each pair (e.g. NO1-NO2) appears in both zone files — deduplicate before computing
     # net flow.
@@ -124,7 +124,7 @@ def load_transmission_table(input_cfg: dict, transmission_dir: Path, start: str,
     # Returns two DataFrames:
     #   internal  — one column per internal zone pair, net flow toward the higher-sorted zone
     #   external  — one column per internal zone, net external import (positive = importing)
-    idx = pd.date_range(start=start, end=end, freq="h", tz="UTC")
+    idx = pd.date_range(start=start, end=end, freq=freq, tz="UTC")
     all_frames = []
     extract_zone = _make_zone_extractor(zones)
 
@@ -226,7 +226,7 @@ def _validate_date_range(cfg: dict) -> tuple[str, str]:
     return start_str, end_str
 
 
-def _check_dst_gaps(df: pd.DataFrame, name: str) -> None:
+def _check_dst_gaps(df: pd.DataFrame, name: str, freq: str = "h") -> None:
     """Warn if a DataFrame has missing or duplicate hours at DST boundaries.
 
     ENTSO-E CET/CEST data often has off-by-one issues at clock-change hours:
@@ -236,17 +236,17 @@ def _check_dst_gaps(df: pd.DataFrame, name: str) -> None:
     if df.empty or not hasattr(df.index, "freq"):
         return
 
-    expected = pd.date_range(df.index.min(), df.index.max(), freq="h", tz="UTC")
+    expected = pd.date_range(df.index.min(), df.index.max(), freq=freq, tz="UTC")
     missing = expected.difference(df.index)
     extra = df.index.difference(expected)
 
     if len(missing) > 0:
-        print(f"  WARNING [{name}]: {len(missing)} missing hour(s) — possible DST gap.")
+        print(f"  WARNING [{name}]: {len(missing)} missing period(s) — possible DST gap.")
         if len(missing) <= 5:
             for ts in missing:
                 print(f"    {ts}")
     if len(extra) > 0:
-        print(f"  WARNING [{name}]: {len(extra)} unexpected hour(s) — possible DST duplicate.")
+        print(f"  WARNING [{name}]: {len(extra)} unexpected period(s) — possible DST duplicate.")
         if len(extra) <= 5:
             for ts in extra:
                 print(f"    {ts}")
@@ -275,12 +275,14 @@ def main() -> None:
     inputs = cfg.get("inputs", {})
     zones = zones_from_cfg(cfg)
     pairs = cfg.get("pairs")
+    freq = resolution_freq(cfg)
+    print(f"Target resolution: {freq}  zones: {zones}")
 
     if "prices" not in inputs:
         raise ValueError("Config must define inputs.prices with per-zone CSV paths")
 
     # Import and normalize price data, then save as parquet for downstream scripts.
-    prices = load_zone_table(inputs["prices"], paths["raw"], start, end, label="price")
+    prices = load_zone_table(inputs["prices"], paths["raw"], start, end, label="price", freq=freq)
 
     # Early check: fail fast if data does not cover the configured date range
     for zone in prices.columns:
@@ -292,12 +294,12 @@ def main() -> None:
                 f"({start} → {end})."
             )
 
-    _check_dst_gaps(prices, "prices")
-    write_prices(prices, paths, zones=zones)  # validates against a schema built for `zones`
+    _check_dst_gaps(prices, "prices", freq)
+    write_prices(prices, paths, zones=zones, freq=freq)  # validates against a schema built for `zones`
     print(f"Saved prices -> {paths['processed'] / 'prices.parquet'}  shape={prices.shape}")
 
     if inputs.get("load"):
-        load = load_load_table(inputs["load"], paths["raw"], start, end)
+        load = load_load_table(inputs["load"], paths["raw"], start, end, freq=freq)
         for zone in load.columns:
             nan_pct = load[zone].isna().mean()
             if nan_pct > 0.5:
@@ -306,22 +308,22 @@ def main() -> None:
                     f"CSV data probably does not cover the configured date range "
                     f"({start} → {end})."
                 )
-        _check_dst_gaps(load, "load")
-        write_parquet(load, paths["processed"] / "load.parquet", schema_name="load", zones=zones)
+        _check_dst_gaps(load, "load", freq)
+        write_parquet(load, paths["processed"] / "load.parquet", schema_name="load", zones=zones, freq=freq)
         print(f"Saved load -> {paths['processed'] / 'load.parquet'}  shape={load.shape}")
 
     if inputs.get("actgen"):
-        actgen = load_actgen_table(inputs["actgen"], paths["raw"], start, end)
-        write_gen(actgen, paths, zones=zones)  # validates against a schema built for `zones`
+        actgen = load_actgen_table(inputs["actgen"], paths["raw"], start, end, freq=freq)
+        write_gen(actgen, paths, zones=zones, freq=freq)  # validates against a schema built for `zones`
         print(f"Saved actgen -> {paths['processed'] / 'actgen.parquet'}  shape={actgen.shape}")
 
     if inputs.get("transmission"):
         transmission, external_balance = load_transmission_table(
-            inputs["transmission"], paths["raw"], start, end, zones=set(zones)
+            inputs["transmission"], paths["raw"], start, end, zones=set(zones), freq=freq
         )
-        _check_dst_gaps(transmission, "transmission")
-        write_transmission(transmission, paths, pairs=pairs)          # validates against a schema built for `pairs`
-        write_external_balance(external_balance, paths, zones=zones)  # validates against a schema built for `zones`
+        _check_dst_gaps(transmission, "transmission", freq)
+        write_transmission(transmission, paths, pairs=pairs, freq=freq)          # schema built for `pairs`
+        write_external_balance(external_balance, paths, zones=zones, freq=freq)  # schema built for `zones`
         print(f"Saved transmission -> shape={transmission.shape}")
         print(f"Saved external_balance -> shape={external_balance.shape}")
 

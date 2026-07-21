@@ -1,4 +1,8 @@
 zones: [NO1, NO2, NO3, NO4, NO5]
+# Target MTU resolution for ingest + processed parquet.
+# 15min is the pipeline default (ENTSO-E 15-min MTU live since 1 Oct 2025);
+# this demo pins hourly because its raw exports are 2025 hourly CSVs.
+resolution: hourly
 date_range:
   start: "2025-01-01T00:00:00Z"
   end: "2025-12-31T23:00:00Z"
@@ -73,6 +77,31 @@ bess:
 rolling:
   lookahead_h: 24
   step_h: 1
+  mode: stochastic        # stochastic | perfect (perfect-foresight benchmark)
+  n_scenarios: 20
+  cvar_alpha: 0.95
+  cvar_weight: 0.2
+  warmup_days: 28
+  refit_every_days: 7
+
+# Probabilistic day-ahead forecast (price_forecast.py)
+forecast:
+  quantiles: [0.1, 0.5, 0.9]
+  n_scenarios: 50
+  backtest_days: 90
+  seed: 42
+
+# P50/P90 revenue methodology (revenue_percentiles.py; see docs/p50_p90_methodology.md)
+p50p90:
+  n_scenarios: 50
+  eval_days: 60
+  default_realism_gap_pct: 15.0   # used when no stochastic valuation_rh gap exists
+  seed: 42
+
+# NTC calibration (calibrate_ntc.py)
+calibration:
+  sep_threshold_eur: 1.0          # |price spread| above which a link counts as binding
+  tolerance_pp: 2.0               # max modeled-vs-observed binding-freq gap (pp)
 
 # ---------------------------------------------------------------------------
 # Supplemental data (run ingest_supplemental.py to populate)

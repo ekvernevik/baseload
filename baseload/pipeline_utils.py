@@ -31,6 +31,47 @@ DEFAULT_VALUE_COLS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Market time unit (MTU) resolution handling
+#
+# ENTSO-E moved the day-ahead MTU from 60 to 15 minutes on 1 Oct 2025. The
+# target resolution is config-driven via the top-level `resolution` key,
+# defaulting to 15-min so intra-hour price movement survives ingestion. Hourly
+# stays selectable for legacy exports.
+# ---------------------------------------------------------------------------
+
+DEFAULT_RESOLUTION = "15min"
+
+_FREQ_ALIASES = {
+    "15min": "15min", "pt15m": "15min", "quarter_hourly": "15min", "quarterly": "15min",
+    "30min": "30min", "pt30m": "30min",
+    "hourly": "h", "h": "h", "1h": "h", "60min": "h", "pt60m": "h",
+}
+
+
+def resolution_freq(cfg: dict[str, Any]) -> str:
+    """Return the pandas frequency string for the config's target resolution."""
+    raw = str(cfg.get("resolution", DEFAULT_RESOLUTION)).strip().lower()
+    if raw not in _FREQ_ALIASES:
+        raise ValueError(
+            f"Unknown resolution '{raw}'. Supported: {sorted(set(_FREQ_ALIASES))}."
+        )
+    return _FREQ_ALIASES[raw]
+
+
+def freq_hours(freq: str) -> float:
+    """Length of one period of *freq* in hours (e.g. '15min' -> 0.25)."""
+    return pd.Timedelta(pd.tseries.frequencies.to_offset(freq)).total_seconds() / 3600.0
+
+
+def index_dt_hours(idx: pd.DatetimeIndex, default: float = 1.0) -> float:
+    """Infer the period length in hours from a DatetimeIndex (median spacing)."""
+    if len(idx) < 2:
+        return default
+    delta = idx.to_series().diff().median()
+    return default if pd.isna(delta) else delta.total_seconds() / 3600.0
+
+
 def load_config(path: str | Path) -> dict[str, Any]:
     cfg_path = Path(path)
     if not cfg_path.exists():
@@ -80,11 +121,14 @@ def _find_column(columns: list[str], candidates: list[str]) -> str | None:
     return None
 
 
-def standardize_series(df: pd.DataFrame, zone: str, value_name: str) -> pd.Series:
-    """Return hourly UTC series from raw table.
+def standardize_series(df: pd.DataFrame, zone: str, value_name: str, freq: str = "h") -> pd.Series:
+    """Return a UTC series at target *freq* from a raw ENTSO-E table.
 
-    Handles ENTSO-E range timestamps (``"DD/MM/YYYY HH:MM:SS - ..."``),
-    CET/CEST time-zone columns, and quarter-hourly to hourly aggregation.
+    Handles ENTSO-E range timestamps (``"DD/MM/YYYY HH:MM:SS - ..."``) and
+    CET/CEST time-zone columns.  Native resolution is preserved when it equals
+    *freq*; finer-than-target data is mean-aggregated; coarser-than-target data
+    is forward-filled within each native MTU (prices are step functions over
+    their MTU, so this is exact, not an interpolation guess).
     """
     cols = list(df.columns)
     time_col = _find_column(cols, DEFAULT_TIME_COLS)
@@ -132,18 +176,34 @@ def standardize_series(df: pd.DataFrame, zone: str, value_name: str) -> pd.Serie
         raise ValueError(f"No valid timestamps in zone={zone}")
 
     out = out.groupby(level=0).mean()
-    out = out.resample("h").mean()
+
+    target = pd.Timedelta(pd.tseries.frequencies.to_offset(freq))
+    native = out.index.to_series().diff().median() if len(out) > 1 else None
+    if native is not None and pd.notna(native) and native > target:
+        # Coarser source (e.g. hourly export, 15-min target): each value is
+        # valid for its whole MTU, so fill forward but never across a data gap.
+        limit = int(native / target) - 1
+        out = out.resample(freq).ffill(limit=limit)
+    else:
+        out = out.resample(freq).mean()
     out.name = value_name
     return out
 
 
-def align_hourly(table_by_zone: dict[str, pd.Series], start: str, end: str) -> pd.DataFrame:
-    idx = pd.date_range(start=start, end=end, freq="h", tz="UTC")
+def align_index(
+    table_by_zone: dict[str, pd.Series], start: str, end: str, freq: str = "h"
+) -> pd.DataFrame:
+    """Align per-zone series onto a shared UTC index at *freq*."""
+    idx = pd.date_range(start=start, end=end, freq=freq, tz="UTC")
     frame = pd.DataFrame(index=idx)
     for zone, ser in sorted(table_by_zone.items()):
         frame[zone] = ser.reindex(idx)
     frame.index.name = "time"
     return frame
+
+
+def align_hourly(table_by_zone: dict[str, pd.Series], start: str, end: str) -> pd.DataFrame:
+    return align_index(table_by_zone, start=start, end=end, freq="h")
 
 
 def ensure_dirs(cfg: dict[str, Any]) -> dict[str, Path]:

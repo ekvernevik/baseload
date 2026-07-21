@@ -60,11 +60,12 @@ def validate_dataframe(
         _validate_column(df[col_schema.name], col_schema, schema.name, _fail)
 
     if schema.check_hourly_continuity and isinstance(df.index, pd.DatetimeIndex):
-        expected_idx = pd.date_range(df.index.min(), df.index.max(), freq="h", tz=df.index.tz)
+        freq = getattr(schema, "freq", "h")
+        expected_idx = pd.date_range(df.index.min(), df.index.max(), freq=freq, tz=df.index.tz)
         missing = expected_idx.difference(df.index)
         if not missing.empty:
             _fail(
-                f"DatetimeIndex has {len(missing)} missing hourly timestamp(s); "
+                f"DatetimeIndex has {len(missing)} missing '{freq}' timestamp(s); "
                 f"first gap at {missing[0]}."
             )
 
@@ -168,11 +169,12 @@ def validate_multiindex_dataframe(
 
     # --- hourly continuity ---------------------------------------------------
     if schema.check_hourly_continuity and isinstance(df.index, pd.DatetimeIndex):
-        expected_idx = pd.date_range(df.index.min(), df.index.max(), freq="h", tz=df.index.tz)
+        freq = getattr(schema, "freq", "h")
+        expected_idx = pd.date_range(df.index.min(), df.index.max(), freq=freq, tz=df.index.tz)
         missing = expected_idx.difference(df.index)
         if not missing.empty:
             _fail(
-                f"DatetimeIndex has {len(missing)} missing hourly timestamp(s); "
+                f"DatetimeIndex has {len(missing)} missing '{freq}' timestamp(s); "
                 f"first gap at {missing[0]}."
             )
 

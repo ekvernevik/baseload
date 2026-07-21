@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from baseload.pipeline_utils import ensure_dirs, load_config, sha256_file, write_json
+from baseload.pipeline_utils import ensure_dirs, load_config, resolution_freq, sha256_file, write_json
 from baseload.io import read_prices
 from baseload.zones import zones_from_cfg
 
@@ -23,12 +23,13 @@ def main() -> None:
     if not prices_path.exists():
         raise FileNotFoundError("Missing processed prices parquet. Run ingest_entsoe.py first.")
 
-    prices = read_prices(paths, zones=zones_from_cfg(cfg))  # validates against a schema built for the configured zones
+    freq = resolution_freq(cfg)
+    prices = read_prices(paths, zones=zones_from_cfg(cfg), freq=freq)  # schema built for configured zones + resolution
     issues = []
-    expected_idx = pd.date_range(prices.index.min(), prices.index.max(), freq="h", tz="UTC")
-    missing_hours = expected_idx.difference(prices.index)
-    if len(missing_hours):
-        issues.append(f"Missing hours: {len(missing_hours)}")
+    expected_idx = pd.date_range(prices.index.min(), prices.index.max(), freq=freq, tz="UTC")
+    missing_periods = expected_idx.difference(prices.index)
+    if len(missing_periods):
+        issues.append(f"Missing periods ({freq}): {len(missing_periods)}")
     if prices.index.has_duplicates:
         issues.append("Duplicate timestamps found")
     if str(prices.index.tz) != "UTC":

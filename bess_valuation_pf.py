@@ -14,10 +14,10 @@ import warnings
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from baseload.pipeline_utils import ensure_dirs, load_config
+from baseload.pipeline_utils import ensure_dirs, index_dt_hours, load_config, resolution_freq
 
 from baseload.io import read_prices, write_valuation_pf, read_load, read_gen, read_external_balance, write_parquet
-from baseload.zones import zones_from_cfg
+from baseload.zones import zones_from_cfg, ntc_from_cfg
 
 try:
     import pulp
@@ -33,10 +33,12 @@ import pypsa  # noqa: E402 (must come after pandas option set)
 from norway_network import build_network, _strip_tz  # noqa: E402
 
 
-def solve_pf(price: pd.Series, p_mw: float, e_mwh: float, eta: float, soc_min: float, soc_max: float, throughput_cost: float):
+def solve_pf(price: pd.Series, p_mw: float, e_mwh: float, eta: float, soc_min: float, soc_max: float, throughput_cost: float, max_cycles_per_day: float | None = None):
     # Build perfect-foresight LP for 24/7 charging/discharging dispatch.
-    # t indexes time steps for the historic price series.
+    # t indexes time steps; each step is dt hours (1.0 hourly, 0.25 for 15-min
+    # MTUs) so energy and revenue stay in MWh/EUR at any resolution.
     t = range(len(price))
+    dt = index_dt_hours(price.index)
 
     model = pulp.LpProblem("bess_pf", pulp.LpMaximize)
 
@@ -47,17 +49,26 @@ def solve_pf(price: pd.Series, p_mw: float, e_mwh: float, eta: float, soc_min: f
     # Define state-of-charge (MWh) with energy limits.
     soc = pulp.LpVariable.dicts("soc", t, lowBound=soc_min * e_mwh, upBound=soc_max * e_mwh)
 
-    # Objective: maximize revenue minus throughput operating cost.
+    # Objective: maximize revenue minus throughput operating cost (per MWh moved).
     model += pulp.lpSum(
-        [price.iloc[i] * (dis[i] - ch[i]) - throughput_cost * (ch[i] + dis[i]) for i in t]
+        [dt * (price.iloc[i] * (dis[i] - ch[i]) - throughput_cost * (ch[i] + dis[i])) for i in t]
     )
 
     # Energy balance constraints across the horizon with efficiency losses.
     for i in t:
         if i == 0:
-            model += soc[i] == 0.5 * e_mwh + eta * ch[i] - dis[i] / eta
+            model += soc[i] == 0.5 * e_mwh + dt * (eta * ch[i] - dis[i] / eta)
         else:
-            model += soc[i] == soc[i - 1] + eta * ch[i] - dis[i] / eta
+            model += soc[i] == soc[i - 1] + dt * (eta * ch[i] - dis[i] / eta)
+
+    # Cycling limit (degradation management): cap total throughput over the
+    # horizon at the equivalent of `max_cycles_per_day` full cycles per day.
+    if max_cycles_per_day is not None:
+        horizon_days = max(len(price) * dt / 24.0, 1e-9)
+        model += (
+            pulp.lpSum([dt * (ch[i] + dis[i]) for i in t])
+            <= 2.0 * e_mwh * max_cycles_per_day * horizon_days
+        ), "cycle_limit"
 
     # Solve with CBC; require an optimal solution.
     model.solve(pulp.PULP_CBC_CMD(msg=False))
@@ -68,8 +79,8 @@ def solve_pf(price: pd.Series, p_mw: float, e_mwh: float, eta: float, soc_min: f
     ch_s = pd.Series([ch[i].value() for i in t], index=price.index)
     dis_s = pd.Series([dis[i].value() for i in t], index=price.index)
     soc_s = pd.Series([soc[i].value() for i in t], index=price.index)
-    rev = (price * (dis_s - ch_s)).sum() - throughput_cost * (ch_s + dis_s).sum()
-    throughput = (ch_s + dis_s).sum()
+    rev = dt * ((price * (dis_s - ch_s)).sum() - throughput_cost * (ch_s + dis_s).sum())
+    throughput = dt * (ch_s + dis_s).sum()
     cycles = throughput / (2 * e_mwh)
 
     return rev, throughput, cycles, soc_s, ch_s, dis_s
@@ -87,6 +98,8 @@ def solve_pf_network(
     soc_min: float,
     soc_max: float,
     throughput_cost: float,
+    zones: list[str] | None = None,
+    ntc: dict[str, float] | None = None,
 ) -> tuple[float, float, float, pd.Series, pd.Series, pd.Series]:
     """Network-constrained perfect-foresight BESS dispatch via PyPSA.
 
@@ -110,7 +123,7 @@ def solve_pf_network(
     # Does not materially affect revenue (<<1% of typical price spreads).
     _EPS = 1e-3
 
-    n, common_idx = build_network(actgen, load, external_balance=external_balance)
+    n, common_idx = build_network(actgen, load, external_balance=external_balance, zones=zones, ntc=ntc)
 
     price_zone = prices[zone].reindex(common_idx).ffill().fillna(0.0)
 
@@ -140,7 +153,11 @@ def solve_pf_network(
         warnings.simplefilter("ignore")
         m = n.optimize.create_model()
 
-    p_store_var = m.variables["StorageUnit-p_store"].sel(name="BESS")
+    # Component dimension is "name" in older linopy/PyPSA and "StorageUnit" in
+    # newer releases — select on whichever non-snapshot dimension exists.
+    p_store_all = m.variables["StorageUnit-p_store"]
+    comp_dim = next(d for d in p_store_all.dims if d != "snapshot")
+    p_store_var = p_store_all.sel({comp_dim: "BESS"})
     charge_cost_da = xr.DataArray(
         (price_zone + throughput_cost + _EPS).values,
         coords={"snapshot": n.snapshots},
@@ -173,8 +190,9 @@ def solve_pf_network(
     ch_s = pd.Series(ch_raw, index=common_idx)
     soc_s = pd.Series(soc_raw, index=common_idx)
 
-    rev = (price_zone * (dis_s - ch_s)).sum() - throughput_cost * (dis_s + ch_s).sum()
-    throughput = (dis_s + ch_s).sum()
+    dt = index_dt_hours(common_idx)
+    rev = dt * ((price_zone * (dis_s - ch_s)).sum() - throughput_cost * (dis_s + ch_s).sum())
+    throughput = dt * (dis_s + ch_s).sum()
     cycles = throughput / (2 * e_mwh)
 
     return rev, throughput, cycles, soc_s, ch_s, dis_s
@@ -189,7 +207,9 @@ def main() -> None:
     cfg = load_config(args.config)
     paths = ensure_dirs(cfg)
     zones = zones_from_cfg(cfg)
-    prices = read_prices(paths, zones=zones)  # validates against a schema built for the configured zones
+    freq = resolution_freq(cfg)
+    ntc = ntc_from_cfg(cfg)
+    prices = read_prices(paths, zones=zones, freq=freq)  # schema built for configured zones + resolution
     bcfg = cfg.get("bess", {})
     p_mw = float(bcfg.get("p_mw", 50))
     e_mwh = float(bcfg.get("e_mwh", 200))
@@ -197,17 +217,19 @@ def main() -> None:
     soc_min = float(bcfg.get("soc_min", 0.1))
     soc_max = float(bcfg.get("soc_max", 0.9))
     tcost = float(bcfg.get("throughput_cost", 0.0))
+    max_cycles = bcfg.get("max_cycles_per_day")
+    max_cycles = float(max_cycles) if max_cycles is not None else None
 
     # Load network inputs for constrained model
-    load_df = read_load(paths, zones=zones)
-    actgen_raw = read_gen(paths, zones=zones)
+    load_df = read_load(paths, zones=zones, freq=freq)
+    actgen_raw = read_gen(paths, zones=zones, freq=freq)
     if isinstance(actgen_raw.columns, pd.MultiIndex):
         actgen = actgen_raw.T.groupby(level=0).sum().T[zones]
     else:
         actgen = actgen_raw[zones]
 
     try:
-        external_balance = read_external_balance(paths, zones=zones)
+        external_balance = read_external_balance(paths, zones=zones, freq=freq)
     except FileNotFoundError:
         external_balance = None
 
@@ -221,7 +243,7 @@ def main() -> None:
     for zone in sorted(prices.columns):
         print(f"  {zone} unconstrained...", end=" ", flush=True)
         rev_u, thr_u, cyc_u, soc_u, ch_u, dis_u = solve_pf(
-            prices[zone].ffill().fillna(0), p_mw, e_mwh, eta, soc_min, soc_max, tcost
+            prices[zone].ffill().fillna(0), p_mw, e_mwh, eta, soc_min, soc_max, tcost, max_cycles
         )
         rows_unc.append({
             "zone": zone,
@@ -237,6 +259,7 @@ def main() -> None:
         rev_n, thr_n, cyc_n, soc_n, ch_n, dis_n = solve_pf_network(
             zone, prices, actgen, load_df, external_balance,
             p_mw, e_mwh, eta, soc_min, soc_max, tcost,
+            zones=zones, ntc=ntc,
         )
         rows_net.append({
             "zone": zone,
