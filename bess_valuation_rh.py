@@ -33,7 +33,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from baseload.pipeline_utils import index_dt_hours, init_pipeline, load_config
+from baseload.pipeline_utils import ensure_dirs, index_dt_hours, load_config, resolution_freq
+from baseload.zones import zones_from_cfg
 from baseload.io import read_prices, write_valuation_rh
 
 from price_forecast import QuantileForecaster
@@ -284,8 +285,10 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    paths = init_pipeline(cfg)
-    prices = read_prices(paths)  # validates against PRICES_SCHEMA on load
+    paths = ensure_dirs(cfg)
+    zones = zones_from_cfg(cfg)
+    freq = resolution_freq(cfg)
+    prices = read_prices(paths, zones=zones, freq=freq)  # validates against PRICES_SCHEMA on load
 
     bcfg = cfg.get("bess", {})
     p_mw = float(bcfg.get("p_mw", 50))
