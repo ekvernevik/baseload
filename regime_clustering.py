@@ -43,7 +43,8 @@ from sklearn.metrics import silhouette_score
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
-from baseload.pipeline_utils import init_pipeline, load_config
+from baseload.pipeline_utils import ensure_dirs, load_config, resolution_freq
+from baseload.zones import zones_from_cfg
 from baseload.io import read_prices, write_parquet
 
 WIND_TYPES = ["Wind Onshore", "Wind Offshore"]
@@ -237,8 +238,10 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    paths = init_pipeline(cfg)
-    prices = read_prices(paths)
+    paths = ensure_dirs(cfg)
+    zones = zones_from_cfg(cfg)
+    freq = resolution_freq(cfg)
+    prices = read_prices(paths, zones=zones, freq=freq)
 
     # Optional physical inputs — use whatever the pipeline has produced.
     def _optional(name: str) -> pd.DataFrame | None:
