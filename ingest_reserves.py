@@ -37,7 +37,7 @@ from pathlib import Path
 import pandas as pd
 
 from baseload.io import write_reserves
-from baseload.pipeline_utils import init_pipeline, load_config, parse_csv_flexible, resolution_freq
+from baseload.pipeline_utils import ensure_dirs, load_config, parse_csv_flexible, resolution_freq
 from baseload.schemas import RESERVE_MARKETS
 
 from ingest_entsoe import _parse_mtu, _validate_date_range
@@ -114,7 +114,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    paths = init_pipeline(cfg)  # configures schema registry (zones/resolution) + dirs
+    paths = ensure_dirs(cfg)
     start, end = _validate_date_range(cfg)
     freq = resolution_freq(cfg)
 
@@ -130,7 +130,7 @@ def main() -> None:
         if not zone_cfg:
             continue
         table = load_reserves_table(zone_cfg, paths["raw"], start, end, freq=freq)
-        write_reserves(table, paths, market)  # validates against reserves_<market> schema
+        write_reserves(table, paths, market, freq=freq)  # validates against reserves_<market> schema
         n_series = table.notna().any().sum()
         print(
             f"Saved {market} -> {paths['processed'] / f'reserves_{market}.parquet'}  "
