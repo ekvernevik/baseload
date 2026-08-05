@@ -302,6 +302,24 @@ VALUATION_PF_SCHEMA = DataFrameSchema(
     min_rows=1,
 )
 
+VALUATION_PF_MULTIYEAR_SCHEMA = DataFrameSchema(
+    name="valuation_pf_multiyear",
+    columns=[
+        ColumnSchema("zone",                     dtype="object",  nullable=True),
+        ColumnSchema("year",                     dtype="int64",   nullable=True),
+        ColumnSchema("capacity_retention_pct",   dtype="float64", nullable=True, min_value=0.0, max_value=100.0, unit="%"),
+        ColumnSchema("eta_effective",            dtype="float64", nullable=True, min_value=0.0, max_value=1.0),
+        ColumnSchema("e_mwh_effective",          dtype="float64", nullable=True, min_value=0.0, unit="MWh"),
+        ColumnSchema("cycles",                   dtype="float64", nullable=True, min_value=0.0, unit="EFC"),
+        ColumnSchema("throughput_mwh",           dtype="float64", nullable=True, min_value=0.0, unit="MWh"),
+        ColumnSchema("revenue_nominal_eur",      dtype="float64", nullable=True, unit="EUR"),
+        ColumnSchema("revenue_discounted_eur",   dtype="float64", nullable=True, unit="EUR"),
+    ],
+    allow_extra_columns=True,
+    min_rows=1,
+    check_hourly_continuity=False,
+)
+
 VALUATION_RH_SCHEMA = DataFrameSchema(
     name="valuation_rh",
     columns=[
@@ -366,10 +384,11 @@ SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     "price_forecast":    build_forecast_schema(),
     "price_scenarios":   build_scenarios_schema(),
     # final
-    "valuation_pf":      VALUATION_PF_SCHEMA,
-    "valuation_rh":      VALUATION_RH_SCHEMA,
-    "forecast_backtest": FORECAST_BACKTEST_SCHEMA,
-    "revenue_p50_p90":   REVENUE_P50P90_SCHEMA,
+    "valuation_pf":            VALUATION_PF_SCHEMA,
+    "valuation_pf_multiyear":  VALUATION_PF_MULTIYEAR_SCHEMA,
+    "valuation_rh":            VALUATION_RH_SCHEMA,
+    "forecast_backtest":       FORECAST_BACKTEST_SCHEMA,
+    "revenue_p50_p90":         REVENUE_P50P90_SCHEMA,
 }
 
 #: Schema builders keyed by artifact name, for callers that need a schema

@@ -16,8 +16,17 @@ import pandas as pd
 
 from baseload.pipeline_utils import ensure_dirs, index_dt_hours, load_config, resolution_freq
 
-from baseload.io import read_prices, write_valuation_pf, read_load, read_gen, read_external_balance, write_parquet
+from baseload.io import (
+    read_prices, write_valuation_pf, write_valuation_pf_multiyear,
+    read_load, read_gen, read_external_balance, write_parquet,
+)
 from baseload.zones import zones_from_cfg, ntc_from_cfg
+from baseload.bess_degradation import (
+    get_chemistry,
+    thermal_efficiency_multiplier,
+    capacity_retention,
+    reached_eol,
+)
 
 try:
     import pulp
@@ -84,6 +93,64 @@ def solve_pf(price: pd.Series, p_mw: float, e_mwh: float, eta: float, soc_min: f
     cycles = throughput / (2 * e_mwh)
 
     return rev, throughput, cycles, soc_s, ch_s, dis_s
+
+
+def solve_pf_multiyear(
+    price: pd.Series,
+    p_mw: float,
+    e_mwh_nominal: float,
+    chemistry: str,
+    soc_min: float,
+    soc_max: float,
+    throughput_cost: float,
+    asset_life_years: int,
+    discount_rate: float,
+    ambient_temp_c: float = 6.0,
+) -> pd.DataFrame:
+    """Year-by-year unconstrained PF valuation with chemistry degradation applied.
+
+    Re-solves ``solve_pf`` once per year of asset life, re-using the same one-year
+    price series each time (no forward price curve available — a flat-price
+    assumption, noted here explicitly). Each year: available energy capacity
+    shrinks per ``capacity_retention``, round-trip efficiency is the chemistry's
+    BOL figure derated once for ambient temperature (see baseload.bess_degradation
+    for why efficiency itself isn't further aged), and dispatch is capped at the
+    chemistry's warranty-style cycling ceiling. Stops early if the battery reaches
+    its end-of-life capacity threshold before ``asset_life_years`` is reached.
+
+    Returns one row per simulated year: zone-agnostic — caller labels the zone.
+    """
+    chem = get_chemistry(chemistry)
+    eta_bol = chem.roundtrip_efficiency_bol * thermal_efficiency_multiplier(ambient_temp_c, chem)
+
+    cum_efc = 0.0
+    rows = []
+    for year in range(1, asset_life_years + 1):
+        age_years = year - 0.5  # mid-year convention
+        retention = capacity_retention(age_years, cum_efc, chem)
+        if reached_eol(retention, chem):
+            break
+
+        e_mwh_eff = e_mwh_nominal * retention
+        rev, throughput, cycles, _soc, _ch, _dis = solve_pf(
+            price, p_mw, e_mwh_eff, eta_bol, soc_min, soc_max, throughput_cost,
+            max_cycles_per_day=chem.max_efc_per_day,
+        )
+        cum_efc += cycles
+
+        discounted_rev = rev / ((1 + discount_rate) ** year)
+        rows.append({
+            "year": year,
+            "capacity_retention_pct": 100 * retention,
+            "eta_effective": eta_bol,
+            "e_mwh_effective": e_mwh_eff,
+            "cycles": cycles,
+            "throughput_mwh": throughput,
+            "revenue_nominal_eur": rev,
+            "revenue_discounted_eur": discounted_rev,
+        })
+
+    return pd.DataFrame(rows)
 
 
 def solve_pf_network(
@@ -220,6 +287,14 @@ def main() -> None:
     max_cycles = bcfg.get("max_cycles_per_day")
     max_cycles = float(max_cycles) if max_cycles is not None else None
 
+    # Degradation config for the multi-year valuation (see baseload.bess_degradation
+    # for why these are placeholder figures, not vendor/TSO-sourced).
+    dcfg = bcfg.get("degradation", {})
+    chemistry = str(dcfg.get("chemistry", "LFP"))
+    asset_life_years = int(dcfg.get("asset_life_years", 15))
+    discount_rate = float(dcfg.get("discount_rate", 0.08))
+    ambient_temp_c = float(dcfg.get("ambient_temp_c", 6.0))
+
     # Load network inputs for constrained model
     load_df = read_load(paths, zones=zones, freq=freq)
     actgen_raw = read_gen(paths, zones=zones, freq=freq)
@@ -238,6 +313,7 @@ def main() -> None:
     # -----------------------------------------------------------------------
     rows_unc = []   # unconstrained (PuLP)
     rows_net = []   # network-constrained (PyPSA)
+    multiyear_frames = []  # degraded multi-year valuation (unconstrained base only)
     traces = {}
 
     for zone in sorted(prices.columns):
@@ -253,6 +329,15 @@ def main() -> None:
             "cycles": cyc_u,
             "eur_per_kw_yr": rev_u / (p_mw * 1000),
         })
+        print("done")
+
+        print(f"  {zone} multi-year ({chemistry}, {asset_life_years}yr)...", end=" ", flush=True)
+        my = solve_pf_multiyear(
+            prices[zone].ffill().fillna(0), p_mw, e_mwh, chemistry,
+            soc_min, soc_max, tcost, asset_life_years, discount_rate, ambient_temp_c,
+        )
+        my.insert(0, "zone", zone)
+        multiyear_frames.append(my)
         print("done")
 
         print(f"  {zone} network-constrained...", end=" ", flush=True)
@@ -283,6 +368,9 @@ def main() -> None:
     write_valuation_pf(val_unc, paths)  # validates against VALUATION_PF_SCHEMA before writing
     write_parquet(val_net, paths["tables"] / "valuation_pf_network.parquet")
 
+    val_multiyear = pd.concat(multiyear_frames, ignore_index=True)
+    write_valuation_pf_multiyear(val_multiyear, paths)  # validates against VALUATION_PF_MULTIYEAR_SCHEMA before writing
+
     # Comparison table: one row per zone, both valuations side by side
     comp = val_unc[["zone", "eur_per_kw_yr"]].rename(columns={"eur_per_kw_yr": "eur_per_kw_yr_unc"})
     comp = comp.merge(
@@ -290,8 +378,17 @@ def main() -> None:
         on="zone",
     )
     comp["ntc_discount_pct"] = 100 * (1 - comp["eur_per_kw_yr_net"] / comp["eur_per_kw_yr_unc"].replace(0, float("nan")))
+
+    # NPV summary of the degraded multi-year valuation, folded into the same comparison table.
+    npv_summary = val_multiyear.groupby("zone").agg(
+        npv_eur=("revenue_discounted_eur", "sum"),
+        effective_life_years=("year", "max"),
+    ).reset_index()
+    npv_summary["npv_eur_per_kw"] = npv_summary["npv_eur"] / (p_mw * 1000)
+    comp = comp.merge(npv_summary, on="zone")
+
     write_parquet(comp, paths["tables"] / "valuation_pf_comparison.parquet")
-    print("\nValuation comparison (€/kW-yr):")
+    print("\nValuation comparison (€/kW-yr, NPV over degraded asset life):")
     print(comp.to_string(index=False))
 
     # -----------------------------------------------------------------------
@@ -332,6 +429,24 @@ def main() -> None:
         ax.legend(fontsize=8)
     plt.tight_layout()
     plt.savefig(paths["figures"] / "valuation_pf_soc_dispatch.png", dpi=150)
+    plt.close()
+
+    # Degradation trajectory for the top unconstrained zone: capacity retention
+    # and nominal annual revenue over the asset's simulated life.
+    top_unc_zone = val_unc.iloc[0]["zone"]
+    zone_my = val_multiyear[val_multiyear["zone"] == top_unc_zone]
+
+    fig, axes = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
+    axes[0].plot(zone_my["year"], zone_my["capacity_retention_pct"], marker="o")
+    axes[0].set_ylabel("Capacity retention (%)")
+    axes[0].set_title(f"Multi-year degradation — {top_unc_zone} ({chemistry}, {asset_life_years}yr)")
+    axes[1].bar(zone_my["year"], zone_my["revenue_nominal_eur"], label="Nominal revenue")
+    axes[1].bar(zone_my["year"], zone_my["revenue_discounted_eur"], label="Discounted revenue", alpha=0.7)
+    axes[1].set_ylabel("EUR / yr")
+    axes[1].set_xlabel("Asset year")
+    axes[1].legend(fontsize=8)
+    plt.tight_layout()
+    plt.savefig(paths["figures"] / "valuation_pf_multiyear_degradation.png", dpi=150)
     plt.close()
 
 

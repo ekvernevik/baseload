@@ -74,6 +74,13 @@ bess:
   soc_min: 0.1
   soc_max: 0.9
   throughput_cost: 0.0
+  # Multi-year degradation valuation. Chemistry parameters are placeholders
+  # (no vendor/TSO datasheet available) — see baseload/bess_degradation.py.
+  degradation:
+    chemistry: LFP        # "LFP" or "NMC"
+    asset_life_years: 15
+    discount_rate: 0.08
+    ambient_temp_c: 6.0    # affects round-trip efficiency derate, not capacity
 rolling:
   lookahead_h: 24
   step_h: 1

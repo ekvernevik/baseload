@@ -180,6 +180,14 @@ def write_valuation_pf(df: pd.DataFrame, paths: dict[str, Path], *, validate: bo
     write_parquet(df, paths["tables"] / "valuation_pf.parquet", schema_name="valuation_pf", validate=validate, also_csv=also_csv)
 
 
+def read_valuation_pf_multiyear(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
+    return read_parquet(paths["tables"] / "valuation_pf_multiyear.parquet", schema_name="valuation_pf_multiyear", validate=validate)
+
+
+def write_valuation_pf_multiyear(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, also_csv: bool = True) -> None:
+    write_parquet(df, paths["tables"] / "valuation_pf_multiyear.parquet", schema_name="valuation_pf_multiyear", validate=validate, also_csv=also_csv)
+
+
 def read_valuation_rh(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
     return read_parquet(paths["tables"] / "valuation_rh.parquet", schema_name="valuation_rh", validate=validate)
 
