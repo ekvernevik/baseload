@@ -32,18 +32,17 @@ def main() -> None:
             "std": s.std(ddof=0),
             # IQR over std: robust to the extreme spike hours (hydro scarcity,
             # interconnector trips) that dominate std. IQR captures the typical
-            # spread opportunity range that a BESS can actually trade.
+            # intra-period price range.
             "iqr": s.quantile(0.75) - s.quantile(0.25),
             "p5": s.quantile(0.05),
             "p50": p50,
             "p95": s.quantile(0.95),
             "p99": s.quantile(0.99),
-            # Negative-price hours are prime charging windows; high frequency
-            # signals structural renewable oversupply, not just transient noise.
+            # High negative-price frequency signals structural renewable
+            # oversupply, not just transient noise.
             "negative_price_freq": (s < 0).mean(),
-            # tail_ratio = p99/p50: measures fat-tail behavior. High ratio means
-            # arbitrage value is concentrated in rare spike hours — increasing
-            # risk if those spikes don't recur.
+            # tail_ratio = p99/p50: measures fat-tail behaviour. A high ratio
+            # means the price distribution is dominated by rare spike hours.
             "tail_ratio": safe_div(s.quantile(0.99), p50),
         }
         records.append(rec)

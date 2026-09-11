@@ -33,8 +33,6 @@ def main() -> None:
 
     # Default separation threshold: 20 €/MWh. Below this, spread differences
     # can be explained by intra-day balancing noise rather than true congestion.
-    # 20 €/MWh is also a rough lower bound for profitable arbitrage after a
-    # typical BESS round-trip efficiency loss (~10%).
     sep_threshold = cfg.get("thresholds", {}).get("spread_abs", 20.0)
     pairs = cfg.get("pairs", [])
     if not pairs:
@@ -59,8 +57,8 @@ def main() -> None:
                 "p95_abs_spread": d.abs().quantile(0.95),
                 "separation_freq": sep.mean(),
                 # max_consecutive_separation_h is the primary congestion signal:
-                # long consecutive runs (>12 h) indicate structural NTC limits,
-                # not transient spikes, and feed the congestion_persistence alert.
+                # long consecutive runs (>12 h) indicate structural transfer
+                # limits, not transient spikes, and feed the congestion_persistence alert.
                 "max_consecutive_separation_h": consecutive_true_max(sep),
             }
         )

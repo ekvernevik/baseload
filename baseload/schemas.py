@@ -29,7 +29,7 @@ external_balance  data/processed/external_balance.parquet
                   negative = exporting.
 
 Final artifacts   artifacts/tables/
-                  valuation_pf, valuation_rh.
+                  forecast_backtest (price_forecast.py).
 
 Artifact classification
 -----------------------
@@ -214,35 +214,8 @@ def build_external_balance_schema(zones: list[str] | None = DEFAULT_ZONES, freq:
 
 
 # ---------------------------------------------------------------------------
-# Reserve markets (#16), probabilistic forecast (#18) — zone/market builders
+# Probabilistic price forecast (#18, price_forecast.py) — zone builders
 # ---------------------------------------------------------------------------
-
-RESERVE_MARKETS = ["mfrr_eam", "afrr", "fcr_d"]
-RESERVE_FIELDS = ["up_price", "down_price", "up_volume", "down_volume"]
-
-
-def build_reserves_schema(market: str, zones: list[str] | None = None, freq: str = "h") -> MultiIndexDataFrameSchema:
-    """Reserve-market series (mFRR EAM, aFRR, FCR-D).
-
-    MultiIndex columns: level 0 = zone, level 1 = field (up/down price [EUR/MW(h)]
-    and volume [MW]). Reserve series legitimately have gaps (MTUs with no
-    activation), so continuity is not enforced.
-    """
-    return MultiIndexDataFrameSchema(
-        name=f"reserves_{market}",
-        index_name=None,
-        index_dtype="datetime64[ns, UTC]",
-        min_rows=24,
-        check_hourly_continuity=False,
-        freq=freq,
-        expected_level0=[],              # any subset of configured zones may be present
-        expected_level1=list(RESERVE_FIELDS),
-        level_names=["_zone", "_field"],
-        min_value=-10000.0,              # down-regulation prices can be deeply negative
-        max_value=15000.0,               # balancing prices spike far above day-ahead
-        unit="EUR/MWh | MW",
-    )
-
 
 def build_forecast_schema(zones: list[str] | None = None, freq: str = "h") -> MultiIndexDataFrameSchema:
     """Per-zone probabilistic day-ahead bands: level 0 = zone, level 1 = p10/p50/p90."""
@@ -291,30 +264,6 @@ EXTERNAL_BALANCE_SCHEMA = build_external_balance_schema(DEFAULT_ZONES)
 # Final artifact schemas  (artifacts/tables/)
 # ---------------------------------------------------------------------------
 
-VALUATION_PF_SCHEMA = DataFrameSchema(
-    name="valuation_pf",
-    columns=[
-        ColumnSchema("zone",          dtype="object",  nullable=True),
-        ColumnSchema("net_revenue",   dtype="float64", nullable=True, unit="EUR"),
-        ColumnSchema("eur_per_kw_yr", dtype="float64", nullable=True, min_value=0.0, unit="EUR/kW/yr"),
-    ],
-    allow_extra_columns=True,
-    min_rows=1,
-)
-
-VALUATION_RH_SCHEMA = DataFrameSchema(
-    name="valuation_rh",
-    columns=[
-        ColumnSchema("zone",             dtype="object",  nullable=True),
-        ColumnSchema("rolling_revenue",  dtype="float64", nullable=True, unit="EUR"),
-        ColumnSchema("pf_revenue",       dtype="float64", nullable=True, unit="EUR"),
-        ColumnSchema("penalty_pct",      dtype="float64", nullable=True, unit="%"),
-        ColumnSchema("eur_per_kw_yr",    dtype="float64", nullable=True, min_value=0.0, unit="EUR/kW/yr"),
-    ],
-    allow_extra_columns=True,
-    min_rows=1,
-)
-
 FORECAST_BACKTEST_SCHEMA = DataFrameSchema(
     name="forecast_backtest",
     columns=[
@@ -325,24 +274,6 @@ FORECAST_BACKTEST_SCHEMA = DataFrameSchema(
         ColumnSchema("pinball_q90",       dtype="float64", nullable=True, min_value=0.0, unit="EUR/MWh"),
         ColumnSchema("coverage_p10_p90",  dtype="float64", nullable=True, min_value=0.0, max_value=1.0),
         ColumnSchema("n_periods",         dtype="float64", nullable=True, min_value=1.0),
-    ],
-    allow_extra_columns=True,
-    min_rows=1,
-)
-
-REVENUE_P50P90_SCHEMA = DataFrameSchema(
-    name="revenue_p50_p90",
-    columns=[
-        ColumnSchema("zone",                dtype="object",  nullable=False),
-        ColumnSchema("p50_eur_yr",          dtype="float64", nullable=True, unit="EUR/yr"),
-        ColumnSchema("p90_eur_yr",          dtype="float64", nullable=True, unit="EUR/yr"),
-        ColumnSchema("p10_eur_yr",          dtype="float64", nullable=True, unit="EUR/yr"),
-        ColumnSchema("mean_eur_yr",         dtype="float64", nullable=True, unit="EUR/yr"),
-        ColumnSchema("p50_eur_per_kw_yr",   dtype="float64", nullable=True, unit="EUR/kW/yr"),
-        ColumnSchema("p90_eur_per_kw_yr",   dtype="float64", nullable=True, unit="EUR/kW/yr"),
-        ColumnSchema("realism_gap_pct",     dtype="float64", nullable=True, unit="%"),
-        ColumnSchema("n_scenarios",         dtype="float64", nullable=True, min_value=1.0),
-        ColumnSchema("eval_hours",          dtype="float64", nullable=True, min_value=1.0),
     ],
     allow_extra_columns=True,
     min_rows=1,
@@ -360,16 +291,10 @@ SCHEMA_REGISTRY: dict[str, DataFrameSchema | MultiIndexDataFrameSchema] = {
     "actgen":            GEN_SCHEMA,
     "transmission":      TRANSMISSION_INTERNAL_SCHEMA,
     "external_balance":  EXTERNAL_BALANCE_SCHEMA,
-    "reserves_mfrr_eam": build_reserves_schema("mfrr_eam"),
-    "reserves_afrr":     build_reserves_schema("afrr"),
-    "reserves_fcr_d":    build_reserves_schema("fcr_d"),
     "price_forecast":    build_forecast_schema(),
     "price_scenarios":   build_scenarios_schema(),
     # final
-    "valuation_pf":      VALUATION_PF_SCHEMA,
-    "valuation_rh":      VALUATION_RH_SCHEMA,
     "forecast_backtest": FORECAST_BACKTEST_SCHEMA,
-    "revenue_p50_p90":   REVENUE_P50P90_SCHEMA,
 }
 
 #: Schema builders keyed by artifact name, for callers that need a schema
@@ -382,9 +307,6 @@ SCHEMA_BUILDERS = {
     "actgen":            build_gen_schema,
     "transmission":      build_transmission_schema,
     "external_balance":  build_external_balance_schema,
-    "reserves_mfrr_eam": lambda zones=None, freq="h": build_reserves_schema("mfrr_eam", zones, freq),
-    "reserves_afrr":     lambda zones=None, freq="h": build_reserves_schema("afrr", zones, freq),
-    "reserves_fcr_d":    lambda zones=None, freq="h": build_reserves_schema("fcr_d", zones, freq),
     "price_forecast":    build_forecast_schema,
     "price_scenarios":   build_scenarios_schema,
 }

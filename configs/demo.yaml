@@ -62,40 +62,15 @@ thresholds:
   congestion_red_h: 24
   oversupply_yellow: 0.05
   oversupply_red: 0.10
-  foresight_yellow: 20
-  foresight_red: 35
 regime:
   k: 3
   seed: 42
-bess:
-  p_mw: 50
-  e_mwh: 200
-  eta: 0.9
-  soc_min: 0.1
-  soc_max: 0.9
-  throughput_cost: 0.0
-rolling:
-  lookahead_h: 24
-  step_h: 1
-  mode: stochastic        # stochastic | perfect (perfect-foresight benchmark)
-  n_scenarios: 20
-  cvar_alpha: 0.95
-  cvar_weight: 0.2
-  warmup_days: 28
-  refit_every_days: 7
 
 # Probabilistic day-ahead forecast (price_forecast.py)
 forecast:
   quantiles: [0.1, 0.5, 0.9]
   n_scenarios: 50
   backtest_days: 90
-  seed: 42
-
-# P50/P90 revenue methodology (revenue_percentiles.py; see docs/p50_p90_methodology.md)
-p50p90:
-  n_scenarios: 50
-  eval_days: 60
-  default_realism_gap_pct: 15.0   # used when no stochastic valuation_rh gap exists
   seed: 42
 
 # NTC calibration (calibrate_ntc.py)
