@@ -55,13 +55,6 @@ inputs:
     NO5: transmission/no5_transmission.csv
     SE3: transmission/se3_transmission.csv
     SE4: transmission/se4_transmission.csv
-  # Reserve markets (ingest_reserves.py). CSV format: MTU, Direction, Price, Volume.
-  # mFRR EAM live Mar 2025; PICASSO aFRR live for FI Mar 2025.
-  reserves:
-    mfrr_eam:
-      NO1: reserves/no1_mfrr_eam.csv
-    afrr: {}
-    fcr_d: {}
 
 pairs:
   - NO1-NO2
@@ -100,44 +93,19 @@ thresholds:
   congestion_red_h: 24
   oversupply_yellow: 0.05
   oversupply_red: 0.10
-  foresight_yellow: 20
-  foresight_red: 35
 
 regime:
   k: 3
   seed: 42
 
-bess:
-  p_mw: 50
-  e_mwh: 200
-  eta: 0.9
-  soc_min: 0.1
-  soc_max: 0.9
-  throughput_cost: 0.0
-  max_cycles_per_day: 2.0   # cycling cap fed to solve_pf (degradation groundwork, #22)
-
-rolling:
-  lookahead_h: 24
-  step_h: 1
-  mode: stochastic
-  n_scenarios: 20
-  cvar_alpha: 0.95
-  cvar_weight: 0.2
-  warmup_days: 28
-  refit_every_days: 7
-
+# Probabilistic day-ahead forecast (price_forecast.py)
 forecast:
   quantiles: [0.1, 0.5, 0.9]
   n_scenarios: 50
   backtest_days: 90
   seed: 42
 
-p50p90:
-  n_scenarios: 50
-  eval_days: 60
-  default_realism_gap_pct: 15.0
-  seed: 42
-
+# NTC calibration (calibrate_ntc.py)
 calibration:
   sep_threshold_eur: 1.0
   tolerance_pp: 2.0

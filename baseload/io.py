@@ -14,8 +14,8 @@ external_balance.parquet Flat wide: columns = zone names, net import MW.
 
 Final artifacts  (artifacts/tables/)
 --------------------------------------
-valuation_pf.parquet/.csv
-valuation_rh.parquet/.csv
+Written by the analysis scripts through ``write_parquet`` (e.g.
+zone_stats, spread_metrics, forecast_backtest).
 """
 from __future__ import annotations
 
@@ -148,44 +148,6 @@ def write_external_balance(df: pd.DataFrame, paths: dict[str, Path], *, validate
     """Persist the external balance DataFrame to ``data/processed/external_balance.parquet``."""
     write_parquet(df, paths["processed"] / "external_balance.parquet", schema_name="external_balance", validate=validate, zones=zones, freq=freq)
 
-
-def read_reserves(paths: dict[str, Path], market: str, *, validate: bool = True, freq: str = "h") -> pd.DataFrame:
-    """Load ``data/processed/reserves_<market>.parquet`` (mFRR EAM / aFRR / FCR-D).
-
-    Returns a MultiIndex-column DataFrame (level 0 = zone, level 1 = field).
-    """
-    return read_parquet(
-        paths["processed"] / f"reserves_{market}.parquet",
-        schema_name=f"reserves_{market}", validate=validate, freq=freq,
-    )
-
-
-def write_reserves(df: pd.DataFrame, paths: dict[str, Path], market: str, *, validate: bool = True, freq: str = "h") -> None:
-    """Persist a reserve-market MultiIndex DataFrame for *market*."""
-    write_parquet(
-        df, paths["processed"] / f"reserves_{market}.parquet",
-        schema_name=f"reserves_{market}", validate=validate, freq=freq,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Final artifact wrappers  (artifacts/tables/)
-# ---------------------------------------------------------------------------
-
-def read_valuation_pf(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
-    return read_parquet(paths["tables"] / "valuation_pf.parquet", schema_name="valuation_pf", validate=validate)
-
-
-def write_valuation_pf(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, also_csv: bool = True) -> None:
-    write_parquet(df, paths["tables"] / "valuation_pf.parquet", schema_name="valuation_pf", validate=validate, also_csv=also_csv)
-
-
-def read_valuation_rh(paths: dict[str, Path], *, validate: bool = True) -> pd.DataFrame:
-    return read_parquet(paths["tables"] / "valuation_rh.parquet", schema_name="valuation_rh", validate=validate)
-
-
-def write_valuation_rh(df: pd.DataFrame, paths: dict[str, Path], *, validate: bool = True, also_csv: bool = True) -> None:
-    write_parquet(df, paths["tables"] / "valuation_rh.parquet", schema_name="valuation_rh", validate=validate, also_csv=also_csv)
 
 
 # ---------------------------------------------------------------------------

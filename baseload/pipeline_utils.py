@@ -277,7 +277,7 @@ def read_artifact(
         Path to the ``.parquet`` file.
     schema_name:
         Optional key into the schema registry (``"prices"``,
-        ``"valuation_pf"``, ``"valuation_rh"``).
+        ``"load"``, ``"forecast_backtest"``).
     validate:
         Set ``False`` to skip validation (e.g. in exploratory notebooks).
     """

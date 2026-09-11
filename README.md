@@ -22,7 +22,7 @@ ENTSO-E publishes TSO load forecasts as min/max envelopes at week-, month- and y
 
 ## Status
 
-Early transition. The repository still contains code from an earlier BESS valuation framing, which is being removed (see [project map §7](docs/PROJECT_MAP.md#7-repository-transition)). The current roadmap starts with that cleanup, then ingesting ENTSO-E load forecasts for all Nordic zones.
+Phase 0 of the roadmap is done: the earlier startup framing has been retired and its material moved to [docs/archive/](docs/archive/) (see [project map §7–§8](docs/PROJECT_MAP.md#7-repository-transition)). Next is Phase 1: ingesting ENTSO-E actual load and load forecasts for all Nordic zones via the API.
 
 ## Running what exists today
 

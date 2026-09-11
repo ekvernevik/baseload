@@ -2,26 +2,21 @@
   "volatility_compression": {
     "metric": 27.2525,
     "severity": "green",
-    "action": "Prefer zones with durable spread opportunities; reduce merchant-only exposure."
+    "action": "Typical intra-period price range is narrow; check whether volatility has compressed structurally."
   },
   "tail_dependence": {
     "metric": 29.800509915014228,
     "severity": "red",
-    "action": "Stress-test downside under clipped tails and add downside reserves."
+    "action": "Price distribution is dominated by rare spike periods; inspect the tail before relying on averages."
   },
   "congestion_persistence": {
     "metric": 885.0,
     "severity": "red",
-    "action": "Prioritize siting near persistent constrained interfaces."
+    "action": "Long runs of zonal price separation; candidate interfaces for the where/when congestion analysis."
   },
   "oversupply_risk": {
     "metric": 0.016329793308210574,
     "severity": "green",
-    "action": "Pair strategy with capture-ready charging and ancillary optionality."
-  },
-  "foresight_risk": {
-    "metric": 0.41760916214856914,
-    "severity": "green",
-    "action": "Invest in short-term forecasting and dispatch tooling before scaling."
+    "action": "High share of negative-price periods; check for structural renewable oversupply."
   }
 }

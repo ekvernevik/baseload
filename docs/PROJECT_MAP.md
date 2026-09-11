@@ -224,7 +224,7 @@ Ordered phases; no dates.
 
 | # | Phase | Done when |
 |---|---|---|
-| 0 | **Retire the old frame** — execute §7 removals and archive | Repo contains no BESS code, tests pass, README matches this map |
+| 0 | **Retire the old frame** — execute §7 removals and archive. **Done 2026-09-11** | Repo contains no BESS code, tests pass, README matches this map |
 | 1 | **Load data foundation** — ingest actual load + week/month/year-ahead forecasts for all Nordic zones via the API, with provenance | Every zone × horizon available as validated parquet for the full available history |
 | 2 | **Study 0** — reproduce the NO1 screenshots for all zones, then test each artefact hypothesis | Audit write-up + coverage/bias tables; first report chapter |
 | 3 | **Study 1** — envelope model, baselines, rolling out-of-sample evaluation | Forecast-vs-ENTSO-E charts for all zones; results chapter |
